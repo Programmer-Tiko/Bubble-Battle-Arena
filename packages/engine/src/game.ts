@@ -1,5 +1,6 @@
 import type { BombState, GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
-import { generateMap, type MapConfig } from "./map.js";
+import { DEFAULT_MAP_CONFIG, generateMap, type MapConfig } from "./map.js";
+import { seededRandom } from "./random.js";
 import { DEFAULT_MOVEMENT_CONFIG, movePlayer, type MovementConfig } from "./movement.js";
 
 const IDLE: MovementInput = { up: false, down: false, left: false, right: false };
@@ -20,6 +21,8 @@ export class Game {
   private upgrades = new Map<string, { capacity: number; range: number }>();
   private nextBombId = 0;
   private nextItemId = 0;
+  private supplyRandom: () => number;
+  private nextSupplyIndex = 0;
   private hitExplosions = new Map<number, Set<string>>();
   private match?: MatchConfig;
   constructor(playerIds: string[], mapConfig: Partial<MapConfig> = {}, movementConfig: Partial<MovementConfig> = {}, bombConfig: Partial<BombConfig> = {}, match?: MatchConfig, itemConfig: Partial<ItemConfig> = {}) {
@@ -39,6 +42,7 @@ export class Game {
       }
       this.match = { ...match, teams: match.teams && { ...match.teams } };
     }
+    this.supplyRandom = seededRandom((mapConfig.seed ?? DEFAULT_MAP_CONFIG.seed) ^ 0x5a17b411);
     const { map, spawns } = generateMap({ ...mapConfig, playerCount: playerIds.length });
     this.movement = { ...DEFAULT_MOVEMENT_CONFIG, ...movementConfig };
     if (!Number.isFinite(this.movement.speed) || this.movement.speed < 0 || !Number.isFinite(this.movement.timestepSeconds) || this.movement.timestepSeconds <= 0 ||
@@ -53,7 +57,7 @@ export class Game {
         !Number.isInteger(b.initialCapacity) || b.initialCapacity < 1 || !Number.isInteger(b.maxCapacity) || b.maxCapacity < b.initialCapacity ||
         !Number.isInteger(b.maxRange) || b.maxRange < 1 || typeof b.stopAtDestructible !== "boolean" || !["ignore", "reset", "eliminate"].includes(b.repeatedHit)) throw new RangeError("Invalid bomb configuration");
     for (const id of playerIds) this.upgrades.set(id, { capacity: b.initialCapacity, range: 1 });
-    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [] };
+    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [], balloon: null };
     // Provisional initial distribution: four boots and a configurable supply of other items.
     const available = map.tiles.flat().filter(t => t.type === "floor" && !spawns.some(p => Math.abs(p.x - t.x) + Math.abs(p.y - t.y) <= 1));
     for (const tile of map.tiles.flat()) if (tile.type === "floor" && !available.includes(tile)) available.push(tile);
@@ -68,6 +72,33 @@ export class Game {
   }
   private addItem(type: ItemType, x: number, y: number, kind: GroundItem["kind"], ownerId?: string): void {
     this.state.items.push({ id: this.nextItemId++, type, x, y, kind, ownerId, active: kind !== "trap" });
+  }
+  /** A bounded selection from currently free floor tiles. Fewer than four means no drop. */
+  private spawnSupply(startedAt: number): void {
+    this.state.balloon = { startedAt, durationSeconds: 20 };
+    const size = this.state.map.tileSize;
+    const tiles = this.state.map.tiles.flat().filter(tile => tile.type === "floor" &&
+      !this.state.items.some(item => item.x === tile.x && item.y === tile.y) &&
+      !this.state.bombs.some(bomb => bomb.x === tile.x && bomb.y === tile.y) &&
+      !this.state.players.some(player => player.status !== "eliminated" && Math.floor(player.x / size) === tile.x && Math.floor(player.y / size) === tile.y));
+    if (tiles.length < 4) return;
+    const count = Math.min(4 + Math.floor(this.supplyRandom() * 3), tiles.length);
+    const types: ItemType[] = ["boots", "capacity", "range", "banana", "slowdown"];
+    const chosen: ItemType[] = [];
+    for (let i = 0; i < count; i++) {
+      const j = i + Math.floor(this.supplyRandom() * (tiles.length - i));
+      [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+      chosen.push(types[Math.floor(this.supplyRandom() * types.length)]);
+    }
+    // Guarantee diversity without retry loops or biasing every event to a fixed category.
+    if (chosen.every(type => type === chosen[0])) {
+      const first = types.indexOf(chosen[0]);
+      chosen[count - 1] = types[(first + 1 + Math.floor(this.supplyRandom() * (types.length - 1))) % types.length];
+    }
+    for (let i = 0; i < count; i++) {
+      this.addItem(chosen[i], tiles[i].x, tiles[i].y, "pickup");
+      this.state.items[this.state.items.length - 1].supplyDroppedAt = startedAt;
+    }
   }
   /** Place one inventory charge on the current tile. Slots are zero-based. */
   useItem(playerId: string, slot: number): boolean {
@@ -239,6 +270,11 @@ export class Game {
         const winners = [...counts].filter(([, count]) => count === maximum);
         this.state.result = winners.length === 1 ? { kind: "winner", teamId: winners[0][0] } : { kind: "draw" };
       }
+    }
+    if (this.state.balloon && this.state.elapsedSeconds >= this.state.balloon.startedAt + this.state.balloon.durationSeconds) this.state.balloon = null;
+    const schedule = [180, 360, 540];
+    while (!this.state.result && this.nextSupplyIndex < schedule.length && this.state.elapsedSeconds + 1e-9 >= schedule[this.nextSupplyIndex]) {
+      this.spawnSupply(schedule[this.nextSupplyIndex++]);
     }
   }
   /** Return a detached public copy so consumers cannot mutate the simulation. */

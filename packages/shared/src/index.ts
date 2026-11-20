@@ -5,12 +5,13 @@ export interface ArenaMap { width: number; height: number; tileSize: number; til
 export type ItemType = "boots" | "capacity" | "range" | "banana" | "slowdown";
 export type TrapType = "banana" | "slowdown";
 export interface InventorySlot { type: TrapType; charges: number }
-export interface GroundItem { id: number; type: ItemType; x: number; y: number; kind: "pickup" | "hazard" | "trap"; ownerId?: string; active: boolean }
+export interface GroundItem { id: number; type: ItemType; x: number; y: number; kind: "pickup" | "hazard" | "trap"; ownerId?: string; active: boolean; supplyDroppedAt?: number }
 export interface PlayerState { boots: number; capacityUpgrades: number; rangeUpgrades: number; inventory: (InventorySlot | null)[]; slowSeconds: number; slide: MovementInput | null; direction: MovementInput; id: string; teamId: string; x: number; y: number; status: "alive" | "trapped" | "eliminated"; trappedSeconds: number }
 /** Directional intent suitable for either WASD or arrow keys. */
 export interface MovementInput { up: boolean; down: boolean; left: boolean; right: boolean }
 export interface BombState { id: number; ownerId: string; x: number; y: number; remainingSeconds: number; range: number }
 export interface ExplosionState { id: number; x: number; y: number; remainingSeconds: number }
+export interface BalloonState { startedAt: number; durationSeconds: number }
 export type MatchResult = { kind: "winner"; teamId: string } | { kind: "draw" };
-export interface GameState { tick: number; elapsedSeconds: number; result: MatchResult | null; map: ArenaMap; players: PlayerState[]; bombs: BombState[]; explosions: ExplosionState[]; items: GroundItem[] }
+export interface GameState { tick: number; elapsedSeconds: number; result: MatchResult | null; map: ArenaMap; players: PlayerState[]; bombs: BombState[]; explosions: ExplosionState[]; items: GroundItem[]; balloon: BalloonState | null }
 export interface GameSnapshot extends GameState {}
