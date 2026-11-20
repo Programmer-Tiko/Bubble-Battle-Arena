@@ -2,7 +2,7 @@
 
 **A real-time multiplayer water-balloon battle game inspired by Crazy Arcade (BnB) and classic Bomberman-style arena gameplay.**
 
-> **Status:** A headless engine and local Phaser prototype implement movement, bombs, items, and inventory. Multiplayer, remaining gameplay mechanics, authentication, and deployment remain planned. This README records the agreed game design and proposed architecture for the University at Buffalo CSE 312 team project.
+> **Status:** A headless engine and Phaser prototype implement movement, bombs, items, inventory, and local development multiplayer. Authentication, the full lobby, and deployment remain planned. This README records the agreed game design and proposed architecture for the University at Buffalo CSE 312 team project.
 
 ## 1. Project Overview
 
@@ -330,3 +330,18 @@ docker compose up
 **Course:** University at Buffalo — CSE 312 Team Project  
 **Team:** Contributors to be added  
 **Inspiration:** Crazy Arcade (BnB) / Bomberman-style arena gameplay. This is an original student project concept; no third-party game code is included in this planning README.
+
+## Local multiplayer development (Phase 6)
+
+Use Node.js 20.19+ or 22.12+. Install dependencies with `npm.cmd install`. In two PowerShell terminals run:
+
+```powershell
+npm.cmd run server
+npm.cmd run dev
+```
+
+Open the Vite URL in four separate browser windows. In the first, choose FFA and 4 players, click **Create test session**, copy the session ID, then click **Join** as Player. Paste that ID in each of the other windows and join as Player. Move with WASD or arrows, place a bomb with Space, and use slots 1?5. Movement and bombs should appear in the other windows. A fifth window can join as Spectator and observe but cannot control a player. To check isolation, create a second session and join it in another window. Team Battle accepts 4, 6, or 8 players; teams are assigned in pairs by join order. Unclaimed slots are stationary simulated players. Select **Local mode** to return to the single-player prototype.
+
+Run `npm.cmd test`, `npm.cmd run test:integration`, `npm.cmd run typecheck`, and `npm.cmd run build` to verify. The server listens only on `127.0.0.1:3001`, rejects non-loopback requests and non-local browser origins, and refuses to start with `NODE_ENV=production`. The development launcher is unauthenticated and must not be exposed publicly. It is not the final lobby or identity system.
+
+The server advances the existing engine at 30 ticks per second and sends full snapshots every three ticks. Set `SNAPSHOT_EVERY_TICKS` and `INPUT_STALE_MS` before starting the server to adjust snapshot frequency and stale-input timeout. A disconnected player's input is cleared; their slot stays reserved and their character remains in the match under normal engine rules. Reconnection and disconnect elimination are not implemented. Reloading a player window claims a different unclaimed slot, if any; create a new session to restart.

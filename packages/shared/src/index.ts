@@ -15,3 +15,22 @@ export interface BalloonState { startedAt: number; durationSeconds: number }
 export type MatchResult = { kind: "winner"; teamId: string } | { kind: "draw" };
 export interface GameState { tick: number; elapsedSeconds: number; result: MatchResult | null; map: ArenaMap; players: PlayerState[]; bombs: BombState[]; explosions: ExplosionState[]; items: GroundItem[]; balloon: BalloonState | null }
 export interface GameSnapshot extends GameState {}
+
+/** Development protocol: clients submit intent only, never gameplay state or identity. */
+export type SessionMode = "ffa" | "team";
+export interface JoinRequest { sessionId: string; role: "player" | "spectator" }
+export interface MoveCommand { seq: number; input: MovementInput }
+export interface ActionCommand { seq: number }
+export interface ItemCommand extends ActionCommand { slot: number }
+export type Reply<T = undefined> = { ok: true; value: T } | { ok: false; error: string };
+export interface JoinInfo { playerId: string | null; teamId: string | null; snapshot: GameSnapshot }
+export interface ClientEvents {
+  join: (request: JoinRequest, reply: (result: Reply<JoinInfo>) => void) => void;
+  move: (command: MoveCommand, reply: (result: Reply) => void) => void;
+  bomb: (command: ActionCommand, reply: (result: Reply) => void) => void;
+  item: (command: ItemCommand, reply: (result: Reply) => void) => void;
+}
+export interface ServerEvents {
+  snapshot: (snapshot: GameSnapshot) => void;
+  finished: (result: MatchResult) => void;
+}
