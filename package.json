@@ -2,12 +2,14 @@
   "name": "bubble-battle-arena",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "frontend"
   ],
   "scripts": {
-    "build": "tsc -b packages/shared packages/engine",
+    "build": "tsc -b packages/shared packages/engine && npm run build --workspace @bubble/frontend",
     "test": "vitest run",
-    "typecheck": "tsc -b packages/shared packages/engine --pretty false"
+    "typecheck": "tsc -b packages/shared packages/engine --pretty false && npm run typecheck --workspace @bubble/frontend",
+    "dev": "tsc -b packages/shared packages/engine && npm run dev --workspace @bubble/frontend"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
