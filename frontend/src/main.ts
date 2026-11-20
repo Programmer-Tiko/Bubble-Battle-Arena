@@ -15,7 +15,7 @@ const sessionField = document.querySelector<HTMLInputElement>("#session")!;
 const modeField = document.querySelector<HTMLSelectElement>("#mode")!;
 const countField = document.querySelector<HTMLSelectElement>("#players")!;
 const roleField = document.querySelector<HTMLSelectElement>("#role")!;
-const server = "http://127.0.0.1:3001";
+const server = import.meta.env.VITE_GAME_SERVER ?? "http://127.0.0.1:3001";
 document.querySelector<HTMLButtonElement>("#create-session")!.onclick = async () => {
   try {
     const response = await fetch(`${server}/dev/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: modeField.value, players: Number(countField.value) }) });
@@ -36,6 +36,12 @@ class ArenaScene extends Phaser.Scene {
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private graphics!: Phaser.GameObjects.Graphics;
   private hud!: Phaser.GameObjects.Text;
+  private labels: Phaser.GameObjects.Text[] = [];
+  private labelCount = 0;
+  private label(x: number, y: number, text: string): void {
+    const label = this.labels[this.labelCount] ?? this.add.text(0, 0, "", { fontSize: "11px", color: "#ffffff", backgroundColor: "#132633" }).setDepth(2);
+    this.labels[this.labelCount++] = label; label.setPosition(x, y).setText(text).setVisible(true);
+  }
 
   constructor() { super("arena"); }
   create(): void {
@@ -64,12 +70,13 @@ class ArenaScene extends Phaser.Scene {
     const player = snapshot.players.find(p => p.id === adapter.playerId);
     const remaining = Math.max(0, 600 - snapshot.elapsedSeconds);
     const result = snapshot.result ? (snapshot.result.kind === "draw" ? "Draw" : `Winner: ${snapshot.result.teamId}`) : "";
-    status.textContent = `${network ? network.status : "Local mode"} | ${network && !network.playerId ? "Spectator" : player?.status === "eliminated" ? "Spectator (eliminated)" : `Player ${adapter.playerId} / ${player?.teamId ?? ""}`} | ${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")} ${result}`;
+    status.textContent = `${network ? network.status : "Local mode"} | ${network && !network.playerId ? "Spectator" : player?.status === "eliminated" ? "Spectator (eliminated)" : `Player ${adapter.playerId} / ${player?.teamId ?? ""}`} | ${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")} ${player ? `| Speed: ${player.slowSeconds > 0 ? 50 : 100 + player.boots * 10}% (boots ${player.boots}) ${player.slowSeconds > 0 ? `| Slowed: ${player.slowSeconds.toFixed(1)}s` : ""}` : ""} ${result}`;
     this.renderSnapshot(snapshot);
   }
   private renderSnapshot(snapshot: GameSnapshot): void {
     const { map } = snapshot;
     this.graphics.clear();
+    this.labels.forEach(label => label.setVisible(false)); this.labelCount = 0;
     for (const row of map.tiles) for (const tile of row) {
       this.graphics.fillStyle(colors[tile.type]);
       this.graphics.fillRect(tile.x * map.tileSize, tile.y * map.tileSize, map.tileSize - 1, map.tileSize - 1);
@@ -106,14 +113,17 @@ class ArenaScene extends Phaser.Scene {
     for (const bomb of snapshot.bombs) {
       this.graphics.fillStyle(0x27408b);
       this.graphics.fillCircle((bomb.x + 0.5) * map.tileSize, (bomb.y + 0.5) * map.tileSize, 11);
+      this.label((bomb.x + 0.5) * map.tileSize - 4, (bomb.y + 0.5) * map.tileSize - 7, String(Math.max(1, Math.ceil(bomb.remainingSeconds))));
     }
     const teams = [...new Set(snapshot.players.map(player => player.teamId))].sort();
     for (const player of snapshot.players) {
       if (player.status === "eliminated") continue;
       this.graphics.fillStyle(player.status === "trapped" ? 0x84e8ff : teamColors[teams.indexOf(player.teamId) % teamColors.length]);
       this.graphics.fillCircle(player.x, player.y, 10);
-      this.graphics.lineStyle(2, 0xffffff);
+      this.graphics.lineStyle(2, player.status === "trapped" ? teamColors[teams.indexOf(player.teamId) % teamColors.length] : 0xffffff);
       this.graphics.strokeCircle(player.x, player.y, 10);
+      const number = snapshot.players.findIndex(p => p.id === player.id) + 1;
+      this.label(player.x - 7, player.y - 23, player.status === "trapped" ? `${number}: ${Math.ceil(player.trappedSeconds)}s` : String(number));
     }
   }
 }

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { io, type Socket } from "socket.io-client";
 import type { ClientEvents, ServerEvents, JoinInfo, GameState, Reply } from "@bubble/shared";
 import { createGameServer, type Session } from "../src/server.js";
@@ -38,6 +38,22 @@ describe("Socket.IO authoritative sessions", () => {
       if (mode === "team") expect([...new Set(teams)].every(t => teams.filter(team => team === t).length === 2)).toBe(true);
     }
   });
+  it.each([["ffa", 4], ["ffa", 5], ["ffa", 7], ["team", 4], ["team", 6], ["team", 8]] as const)("synchronizes %s with %i connected players", async (mode, count) => {
+    const session = server.create(mode, count), clients = await Promise.all(Array.from({ length: count }, () => client()));
+    const joins = await Promise.all(clients.map(socket => join(socket, session)));
+    expect(joins.every(result => result.ok)).toBe(true);
+    const ids = joins.map(result => result.ok ? result.value.playerId : null);
+    expect(new Set(ids).size).toBe(count);
+    const snapshots: GameState[] = [];
+    for (const socket of clients) socket.once("snapshot", snapshot => snapshots.push(snapshot));
+    steps(session, 1);
+    await vi.waitFor(() => expect(snapshots).toHaveLength(count));
+    expect(snapshots.every(snapshot => JSON.stringify(snapshot) === JSON.stringify(snapshots[0]))).toBe(true);
+    const finishes: unknown[] = []; clients.forEach(socket => socket.once("finished", result => finishes.push(result)));
+    const state = (session.game as unknown as { state: GameState }).state; state.tick = 17999; state.elapsedSeconds = 17999 / 30;
+    steps(session, 1); await vi.waitFor(() => expect(finishes).toHaveLength(count));
+    expect(finishes.every(result => JSON.stringify(result) === JSON.stringify({ kind: "draw" }))).toBe(true);
+  });
   it("validates four, six, eight and odd FFA rosters, and rejects invalid counts", () => {
     for (const count of [4, 6, 8]) expect(server.create("team", count).slots).toHaveLength(count);
     expect(server.create("ffa", 5).slots).toHaveLength(5);
@@ -61,12 +77,12 @@ describe("Socket.IO authoritative sessions", () => {
     const seen: GameState[] = [], leaked: GameState[] = [];
     observer.on("snapshot", s => seen.push(s)); other.on("snapshot", s => leaked.push(s));
     expect((await command(player, "move", { seq: 0, input: { ...idle, right: true } })).ok).toBe(true);
-    steps(a, 3); await pause();
+    steps(a, 3); await vi.waitFor(() => expect(seen.at(-1)?.tick).toBe(3));
     expect(seen.at(-1)!.players.find(p => p.id === joined.value.playerId)!.x).not.toBe(joined.value.snapshot.players.find(p => p.id === joined.value.playerId)!.x);
     expect(leaked).toHaveLength(0);
-    expect((await command(player, "bomb", { seq: 0 })).ok).toBe(true); steps(a, 1); await pause(); expect(seen.at(-1)!.bombs).toHaveLength(1);
-    steps(a, 89); await pause(); expect(seen.some(s => s.explosions.length > 0)).toBe(true);
-    expect(leaked).toHaveLength(0); steps(b, 1); await pause(); expect(leaked.at(-1)!.players.every(p => !joined.value.snapshot.players.some(q => q.id === p.id))).toBe(true);
+    expect((await command(player, "bomb", { seq: 0 })).ok).toBe(true); steps(a, 1); await vi.waitFor(() => expect(seen.at(-1)?.bombs).toHaveLength(1));
+    steps(a, 89); await vi.waitFor(() => expect(seen.some(s => s.explosions.length > 0)).toBe(true), { timeout: 5000 });
+    expect(leaked).toHaveLength(0); steps(b, 1); await vi.waitFor(() => expect(leaked).toHaveLength(1)); expect(leaked.at(-1)!.players.every(p => !joined.value.snapshot.players.some(q => q.id === p.id))).toBe(true);
   });
   it("stops stale and disconnected movement and never reassigns the identity", async () => {
     const session = server.create("ffa", 4), socket = await client(); const joined = await join(socket, session); if (!joined.ok) throw new Error(joined.error);
@@ -92,9 +108,10 @@ describe("Socket.IO authoritative sessions", () => {
     const snapshots1: GameState[] = [], snapshots2: GameState[] = []; one.on("snapshot", s => snapshots1.push(s)); two.on("snapshot", s => snapshots2.push(s));
     const state = (session.game as unknown as { state: GameState }).state;
     const [a, ally, enemy] = state.players; a.x = ally.x = 160; a.y = ally.y = 160; enemy.x = 300; enemy.y = 300;
-    a.status = "trapped"; a.trappedSeconds = 10; steps(session, 1); await pause(); expect(snapshots1.at(-1)!.players[0].status).toBe("alive");
-    const current = (session.game as unknown as { state: GameState }).state; current.players[0].status = "trapped"; current.players[0].trappedSeconds = 0.01; steps(session, 1); await pause(); expect(snapshots1.at(-1)!.players[0].status).toBe("eliminated");
-    const updated = (session.game as unknown as { state: GameState }).state; updated.tick = 5399; updated.elapsedSeconds = 5399 / 30; steps(session, 1); await pause();
+    a.status = "trapped"; a.trappedSeconds = 10; steps(session, 1); await vi.waitFor(() => expect(snapshots1.at(-1)?.players[0].status).toBe("alive"));
+    const current = (session.game as unknown as { state: GameState }).state; current.players[0].status = "trapped"; current.players[0].trappedSeconds = 0.01; steps(session, 1); await vi.waitFor(() => expect(snapshots1.at(-1)?.players[0].status).toBe("eliminated"));
+    const updated = (session.game as unknown as { state: GameState }).state; updated.tick = 5399; updated.elapsedSeconds = 5399 / 30; steps(session, 1); await vi.waitFor(() => expect(snapshots1.at(-1)?.balloon?.startedAt).toBe(180));
+    await vi.waitFor(() => expect(snapshots2.at(-1)?.balloon?.startedAt).toBe(180));
     expect(snapshots1.at(-1)!.balloon?.startedAt).toBe(180);
     expect(snapshots1.at(-1)!.items.some(i => i.supplyDroppedAt === 180)).toBe(true);
     expect(snapshots1.at(-1)).toEqual(snapshots2.at(-1));
@@ -104,10 +121,10 @@ describe("Socket.IO authoritative sessions", () => {
     const joined = await join(player, session); if (!joined.ok) throw new Error(joined.error);
     await join(spectator, session, "spectator"); const seen: GameState[] = []; spectator.on("snapshot", s => seen.push(s));
     expect((await command(player, "bomb", { seq: 0 })).ok).toBe(true);
-    steps(session, 90); await pause();
-    expect(seen.some(s => s.explosions.length > 0 && s.players.find(p => p.id === joined.value.playerId)?.status === "trapped")).toBe(true);
-    steps(session, 300); await pause();
-    expect(seen.at(-1)!.players.find(p => p.id === joined.value.playerId)?.status).toBe("eliminated");
+    steps(session, 90);
+    await vi.waitFor(() => expect(seen.some(s => s.explosions.length > 0 && s.players.find(p => p.id === joined.value.playerId)?.status === "trapped")).toBe(true), { timeout: 5000 });
+    steps(session, 300);
+    await vi.waitFor(() => expect(seen.at(-1)?.players.find(p => p.id === joined.value.playerId)?.status).toBe("eliminated"), { timeout: 5000 });
     expect((await command(player, "bomb", { seq: 1 })).ok).toBe(false);
   });
   it("validates the local launcher HTTP request and returns an unguessable session ID", async () => {
@@ -126,12 +143,59 @@ describe("Socket.IO authoritative sessions", () => {
     const state = (session.game as unknown as { state: GameState }).state;
     for (const p of state.players.slice(1)) { p.status = "trapped"; p.trappedSeconds = 0.01; }
     let result: unknown; spectator.on("finished", value => { result = value; });
-    steps(session, 1); await pause(); expect(result).toEqual({ kind: "winner", teamId: joined.value.teamId });
+    steps(session, 1); await vi.waitFor(() => expect(result).toEqual({ kind: "winner", teamId: joined.value.teamId }));
   });
   it("runs the default automatic fixed-step loop", async () => {
     const automatic = createGameServer();
     try { const session = automatic.create("ffa", 4); await new Promise(resolve => setTimeout(resolve, 120)); expect(session.game.getSnapshot().tick).toBeGreaterThanOrEqual(2); }
     finally { await automatic.close(); }
+  });
+  it("expires abandoned sessions, preserves connected sessions, and cleans completed sessions", async () => {
+    const active = server.create("ffa", 4), abandoned = server.create("ffa", 4);
+    const watcher = await client(); await join(watcher, active, "spectator");
+    clock += 120001; server.cleanup();
+    expect(server.sessions.has(abandoned.id)).toBe(false); expect(server.sessions.has(active.id)).toBe(true);
+    const state = (active.game as unknown as { state: GameState }).state;
+    state.players.slice(1).forEach(p => { p.status = "eliminated"; }); steps(active, 1);
+    const tick = active.game.getSnapshot().tick; steps(active, 10); expect(active.game.getSnapshot().tick).toBe(tick);
+    clock += 300001; server.cleanup(); expect(server.sessions.has(active.id)).toBe(false);
+    await vi.waitFor(() => expect(watcher.connected).toBe(false));
+  });
+  it("enforces resource limits and message rate limits", async () => {
+    const limited = createGameServer({ autoTick: false, maxSessions: 1 });
+    try { limited.create("ffa", 4); expect(() => limited.create("ffa", 4)).toThrow("capacity"); } finally { await limited.close(); }
+    const session = server.create("ffa", 4), socket = await client(); await join(socket, session);
+    for (let i = 0; i < 89; i++) expect((await command(socket, "move", { seq: i, input: idle })).ok).toBe(true);
+    expect((await command(socket, "move", { seq: 89, input: idle })).ok).toBe(false);
+  });
+  it("rejects non-local origins and invalid sessions", async () => {
+    const response = await fetch(`${url}/dev/sessions`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://example.com" }, body: JSON.stringify({ mode: "ffa", players: 4 }) });
+    expect(response.status).toBe(403);
+    const socket = await client(); const reply: Reply<JoinInfo> = await new Promise(resolve => socket.emit("join", { sessionId: "invalid", role: "player" }, resolve));
+    expect(reply.ok).toBe(false);
+  });
+  it("disconnects oversized and unknown packets and rejects spectator escalation", async () => {
+    const session = server.create("ffa", 4), watcher = await client(); await join(watcher, session, "spectator");
+    expect((await command(watcher, "bomb", { seq: 0, playerId: session.slots[0].id })).ok).toBe(false);
+    (watcher.emit as (...args: unknown[]) => void)("invented", {});
+    await vi.waitFor(() => expect(watcher.connected).toBe(false));
+    const attacker = await client(); await join(attacker, session);
+    (attacker.emit as (...args: unknown[]) => void)("move", { seq: 0, input: idle, padding: "x".repeat(2048) }, () => {});
+    await vi.waitFor(() => expect(attacker.connected).toBe(false));
+  });
+  it("keeps combat running safely when a player disconnects", async () => {
+    const session = server.create("ffa", 4), player = await client(), spectator = await client();
+    const joined = await join(player, session); if (!joined.ok) throw new Error(joined.error); await join(spectator, session, "spectator");
+    const seen: GameState[] = []; spectator.on("snapshot", snapshot => seen.push(snapshot));
+    expect((await command(player, "bomb", { seq: 0 })).ok).toBe(true); player.disconnect();
+    await vi.waitFor(() => expect(session.slots[0].socketId).toBeUndefined()); steps(session, 90);
+    await vi.waitFor(() => expect(seen.some(s => s.explosions.length > 0)).toBe(true), { timeout: 5000 });
+    expect(session.game.getSnapshot().players.find(p => p.id === joined.value.playerId)?.status).toBe("trapped");
+  });
+  it("cleans up rapid connection churn without releasing claimed identities", async () => {
+    const session = server.create("ffa", 4), ids: (string | null)[] = [];
+    for (let i = 0; i < 4; i++) { const socket = await client(), result = await join(socket, session); if (result.ok) ids.push(result.value.playerId); socket.disconnect(); await vi.waitFor(() => expect(session.members.size).toBe(0)); }
+    expect(new Set(ids).size).toBe(4); expect((await join(await client(), session)).ok).toBe(false);
   });
   it("disables the development server in production", () => { expect(() => createGameServer({ environment: "production" })).toThrow(); });
 });
