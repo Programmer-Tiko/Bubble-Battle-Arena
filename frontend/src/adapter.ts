@@ -6,6 +6,7 @@ export interface GameAdapter {
   readonly playerId: string;
   setInput(input: MovementInput): void;
   placeBomb(): void;
+  useItem(slot: number): void;
   advance(deltaMs: number): void;
   snapshot(): GameSnapshot;
 }
@@ -18,6 +19,7 @@ export class LocalGameAdapter implements GameAdapter {
   private readonly tickMs = DEFAULT_MOVEMENT_CONFIG.timestepSeconds * 1000;
   setInput(input: MovementInput): void { this.game.setInput(this.playerId, input); }
   placeBomb(): void { this.game.placeBomb(this.playerId); }
+  useItem(slot: number): void { this.game.useItem(this.playerId, slot); }
   advance(deltaMs: number): void {
     // Avoid simulating a long tab suspension on return.
     this.accumulatedMs += Math.max(0, Math.min(deltaMs, 250));

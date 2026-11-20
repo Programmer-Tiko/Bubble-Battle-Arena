@@ -17,3 +17,7 @@ Bombs start with capacity 1 and range 1, with provisional capacity and range cap
 ## Phase 3 match defaults
 
 A match can be created with an explicit FFA or team roster. With no match configuration, the one-player local prototype is an open-ended sandbox. Trapped players count as survivors; simultaneous enemy and teammate contact gives enemy contact priority. Eliminated players remain in snapshots for a future spectator client, but cannot move or place bombs. Client spectator controls and networking arrive in a later phase.
+
+## Phase 4 item defaults
+
+The initial floor supply contains four boots and two pickups of each other type, placed deterministically away from spawn areas; the non-boot quantities and placement are provisional; `ItemConfig.initialOtherPerType` configures the non-boot supply. Capacity and range use the Phase 2 caps; a capped pickup remains on the ground. Inventory has no stack limit; if all slots are occupied, a new type remains on the ground. Each unused charge becomes one hazard on elimination by default; `ItemConfig.chargesPerHazard` configures this provisional conversion. Drops use nearest available floor tiles in a deterministic order, avoiding bombs, items, and living players; if there are more drops than free tiles, drops share those tiles. If no valid floor tile exists, drops cannot be placed. A banana uses the current movement direction (or the last direction when stationary); its slide ends on the first obstruction and is interrupted by trapping. These unresolved details are temporary defaults.

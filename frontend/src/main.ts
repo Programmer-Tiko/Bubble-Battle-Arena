@@ -10,13 +10,15 @@ class ArenaScene extends Phaser.Scene {
   private readonly adapter: GameAdapter = new LocalGameAdapter();
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private graphics!: Phaser.GameObjects.Graphics;
+  private hud!: Phaser.GameObjects.Text;
 
   constructor() { super("arena"); }
   create(): void {
     if (!this.input.keyboard) throw new Error("Keyboard input is unavailable");
-    this.keys = this.input.keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE") as Record<string, Phaser.Input.Keyboard.Key>;
+    this.keys = this.input.keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,ONE,TWO,THREE,FOUR,FIVE") as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard.addCapture(["UP", "DOWN", "LEFT", "RIGHT"]);
     this.graphics = this.add.graphics();
+    this.hud = this.add.text(5, 5, "", { fontSize: "13px", color: "#ffffff", backgroundColor: "#132633" }).setScrollFactor(0).setDepth(1);
     const { map } = this.adapter.snapshot();
     this.cameras.main.setBounds(0, 0, map.width * map.tileSize, map.height * map.tileSize);
     this.renderSnapshot(this.adapter.snapshot());
@@ -29,6 +31,7 @@ class ArenaScene extends Phaser.Scene {
       right: this.keys.D.isDown || this.keys.RIGHT.isDown,
     };
     if (Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) this.adapter.placeBomb();
+    ["ONE", "TWO", "THREE", "FOUR", "FIVE"].forEach((key, index) => { if (Phaser.Input.Keyboard.JustDown(this.keys[key])) this.adapter.useItem(index); });
     this.adapter.setInput(input);
     this.adapter.advance(delta);
     this.renderSnapshot(this.adapter.snapshot());
@@ -44,6 +47,14 @@ class ArenaScene extends Phaser.Scene {
       this.graphics.fillStyle(0x88e9ff, 0.8);
       this.graphics.fillRect(explosion.x * map.tileSize + 3, explosion.y * map.tileSize + 3, map.tileSize - 6, map.tileSize - 6);
     }
+    const itemColors = { boots: 0x52bd65, capacity: 0x7266df, range: 0xf39843, banana: 0xffdf41, slowdown: 0xe25f7b };
+    for (const item of snapshot.items) {
+      this.graphics.fillStyle(itemColors[item.type], item.kind === "trap" && !item.active ? 0.5 : 1);
+      this.graphics.fillRect(item.x * map.tileSize + 9, item.y * map.tileSize + 9, 14, 14);
+      if (item.kind !== "pickup") { this.graphics.lineStyle(2, 0x222222); this.graphics.strokeRect(item.x * map.tileSize + 9, item.y * map.tileSize + 9, 14, 14); }
+    }
+    const local = snapshot.players.find(p => p.id === this.adapter.playerId);
+    this.hud.setText(local ? local.inventory.map((slot, i) => `${i + 1}: ${slot ? `${slot.type} x${slot.charges}` : "-"}`).join("  ") : "");
     for (const bomb of snapshot.bombs) {
       this.graphics.fillStyle(0x27408b);
       this.graphics.fillCircle((bomb.x + 0.5) * map.tileSize, (bomb.y + 0.5) * map.tileSize, 11);
