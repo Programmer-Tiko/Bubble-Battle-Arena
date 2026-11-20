@@ -1,0 +1,17 @@
+{
+  "name": "bubble-battle-arena",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b packages/shared packages/engine",
+    "test": "vitest run",
+    "typecheck": "tsc -b packages/shared packages/engine --pretty false"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.1"
+  },
+  "type": "module"
+}
