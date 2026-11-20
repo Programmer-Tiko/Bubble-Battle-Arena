@@ -2,13 +2,22 @@
 
 **A real-time multiplayer water-balloon battle game inspired by Crazy Arcade (BnB) and classic Bomberman-style arena gameplay.**
 
-> **Status:** A headless engine and Phaser prototype implement movement, bombs, items, inventory, and local development multiplayer. Authentication, the full lobby, and deployment remain planned. This README records the agreed game design and proposed architecture for the University at Buffalo CSE 312 team project.
+> **Status:** Phases 1A-7 are merged: the headless game engine, Phaser client, development-only Socket.IO multiplayer, integration tests, session safeguards, and CI are implemented. Authentication, the full lobby and room manager, database, production deployment, and Objective 4 remain unfinished. See the [integration handoff](docs/integration-guide.md) for existing and proposed boundaries.
+
+| Phase | Implemented work |
+| --- | --- |
+| 1A | Headless engine foundation and map generation |
+| 1B-3 | Local Phaser controls, bombs, trapping, rescue, elimination, and match outcomes |
+| 4 | Passive upgrades, inventory, traps, and elimination drops |
+| 5 | Timed balloon supply drops |
+| 6 | Development-only authoritative Socket.IO sessions, network client, and spectators |
+| 7 | Multiplayer regression coverage, lifecycle limits, security readiness, performance work, gameplay indicators, and GitHub Actions CI |
 
 ## 1. Project Overview
 
 Bubble Battle Arena is a browser-based, top-down, 2D multiplayer game. Players navigate a destructible tile-based arena, place water bombs, uncover power-ups, deploy traps, and compete either individually or in two-person teams.
 
-Unlike a conventional elimination game, bomb blasts **trap** players rather than eliminating them immediately. A trapped player can be rescued by a teammate, eliminated early by an opponent, or automatically eliminated when the 10-second trap timer expires. All movement, bombs, collisions, rescues, item events, and match results are intended to be synchronized in real time over WebSockets.
+Unlike a conventional elimination game, bomb blasts **trap** players rather than eliminating them immediately. A trapped player can be rescued by a teammate, eliminated early by an opponent, or automatically eliminated when the 10-second trap timer expires. Movement, bombs, collisions, rescues, item events, and match results are synchronized in the local development multiplayer prototype over WebSockets; authenticated production integration remains unfinished.
 
 **Target capacity:** 4–8 active players per room, multiple simultaneous rooms, and spectators for in-progress matches. The multi-room and spectator design is intended to help accommodate audience participation during the course presentation; course-staff confirmation of the 8-player-per-match cap is still important.
 
@@ -74,7 +83,7 @@ The room creator becomes the **host** and chooses:
 - The game uses a top-down **tile-based** arena.
 - The **entire outer border** consists of indestructible walls.
 - A small number of **indestructible walls** are also distributed randomly inside the map.
-- Other walls may be **destructible**, opening paths when destroyed; destroying a wall may reveal an item.
+- Other walls may be **destructible**, opening paths when destroyed; the planned design allows destroyed walls to reveal items, but wall-triggered item reveals are not implemented yet.
 - Players spawn at randomly assigned **valid, safe** spawn positions.
 - The map generator/validator should avoid placing players inside walls or in completely inaccessible positions.
 
@@ -161,18 +170,18 @@ When a player is eliminated:
 7. **Win, lose, or draw**; eliminated users and late arrivals can spectate.
 8. Return to the room to play again; spectators may join as players when spaces are available.
 
-## 10. Proposed Technical Architecture (Not Yet Implemented)
+## 10. Current and Proposed Technical Architecture
 
 | Layer | Proposed technology | Responsibility |
 | --- | --- | --- |
-| Browser frontend | **TypeScript + Phaser 3** | 2D tile rendering, controls, animations, lobby, inventory and spectator UI |
-| Web application / game server | **Node.js + TypeScript + Express** | HTTP APIs, rooms, game loop, authoritative physics and rules |
-| Real-time transport | **Socket.IO over WebSockets** | Room-scoped events, player inputs, state snapshots, spectator updates |
-| Authentication server | **Separate Node.js service** | `/register`, `/login`, `/logout`, password hashing, RS256 JWT issuing |
-| Database | **PostgreSQL in its own container** | Users, room metadata if needed, optional match history |
-| Reverse proxy | **nginx** | Route auth requests to Auth Server, app traffic to Game Server, proxy WebSocket upgrades |
-| Local orchestration | **Docker Compose** | Launch nginx, frontend/app, auth server, and database |
-| Production | **Public host + domain + valid HTTPS** | TLS, HTTP-to-HTTPS redirect, WSS connections |
+| Browser frontend | **TypeScript + Phaser 3** | Implemented gameplay rendering, controls, inventory and development spectator UI; lobby is planned |
+| Game server | **Node.js + TypeScript + Express** | Implemented loopback-only development sessions and authoritative game loop; production room integration is planned |
+| Real-time transport | **Socket.IO over WebSockets** | Implemented session-scoped development inputs, snapshots and spectator updates; authentication is planned |
+| Authentication server (planned) | **Separate Node.js service** | `/register`, `/login`, `/logout`, password hashing, RS256 JWT issuing |
+| Database (planned) | **PostgreSQL in its own container** | Users, room metadata if needed, optional match history |
+| Reverse proxy (planned) | **nginx** | Route auth requests to Auth Server, app traffic to Game Server, proxy WebSocket upgrades |
+| Local orchestration (planned) | **Docker Compose** | Launch nginx, frontend/app, auth server, and database |
+| Production (planned) | **Public host + domain + valid HTTPS** | TLS, HTTP-to-HTTPS redirect, WSS connections |
 
 **Illustrative request flow:**
 
@@ -213,23 +222,18 @@ Browser (HTTP / HTTPS + WS / WSS)
 - Late spectators receive a full state snapshot before live updates.
 - The same app must support **local WS over HTTP** and **production WSS over HTTPS**.
 
-### Proposed repository structure
+### Repository structure
 
 ```text
-Bubble-Battle-Arena/
-├── README.md
-├── compose.yaml                  # Planned: local Docker Compose
-├── frontend/                     # Planned: TypeScript + Phaser game and lobby
-├── services/
-│   ├── game/                     # Planned: rooms, WebSockets, game state, rules
-│   └── auth/                     # Planned: registration, login, JWT issuer
-├── infra/
-│   └── nginx/                    # Planned: reverse-proxy configuration
-├── docs/                          # Planned: protocol / game-rules documentation
-└── tests/                         # Planned: integration and game-logic tests
+frontend/                  Phaser client and local/network adapters
+packages/engine/           Headless gameplay and engine tests
+packages/shared/           Gameplay state and Socket.IO types
+services/game/             Development game server and integration tests
+docs/                      Development notes and integration handoff
+.github/workflows/         CI verification
 ```
 
-This tree is a **proposal**, not a claim that these files currently exist.
+The authentication service, room manager, database, nginx configuration, and Docker Compose files are still planned.
 
 ## 11. CSE 312 Objectives and Acceptance Plan
 
@@ -283,7 +287,7 @@ This tree is a **proposal**, not a claim that these files currently exist.
 
 ## 13. Development Workflow
 
-- **Default branch:** `main` (planned).
+- **Default branch:** `main`.
 - Each contributor works on a dedicated branch, commits using their own GitHub identity, and opens a pull request.
 - Review and merge finished changes into `main`. **Unmerged branch-only commits do not meet the individual report's default-branch requirement.**
 - Suggested initial workstreams: (1) lobby / frontend, (2) game rules / server simulation, (3) auth + persistence, (4) Docker/nginx/deployment + testing, with cross-review and shared integration.
@@ -305,14 +309,14 @@ The following were **not yet decided** and should not be treated as finalized ru
 
 ## 15. Setup and Deployment (To Be Added)
 
-**Local movement prototype:** install Node.js 20.19+ or 22.12+ and run:
+**Local single-player mode:** install Node.js 20.19+ or 22.12+ and run:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local Vite URL shown in the terminal. Move with WASD or the arrow keys place a bomb with Space, and use inventory slots with 1?5. This is a single-player prototype, not the multiplayer or authentication system. Run `npm test`, `npm run typecheck`, and `npm run build` for verification. See [development notes](docs/development-notes.md) for temporary decisions.
+Open the local Vite URL shown in the terminal. Move with WASD or the arrow keys, place a bomb with Space, and use inventory slots with keys 1-5. The page starts in single-player mode; the local multiplayer launcher is described below. Authentication is not implemented. Run `npm test`, `npm run typecheck`, and `npm run build` for verification. See [development notes](docs/development-notes.md) for temporary decisions.
 
 The future deployment must specify any additional configuration and support the following required local workflow:
 
@@ -340,7 +344,7 @@ npm.cmd run server
 npm.cmd run dev
 ```
 
-Open the Vite URL in four separate browser windows. In the first, choose FFA and 4 players, click **Create test session**, copy the session ID, then click **Join** as Player. Paste that ID in each of the other windows and join as Player. Move with WASD or arrows, place a bomb with Space, and use slots 1?5. Movement and bombs should appear in the other windows. A fifth window can join as Spectator and observe but cannot control a player. To check isolation, create a second session and join it in another window. Team Battle accepts 4, 6, or 8 players; teams are assigned in pairs by join order. Unclaimed slots are stationary simulated players. Select **Local mode** to return to the single-player prototype.
+Open the Vite URL in four separate browser windows. In the first, choose FFA and 4 players, click **Create test session**, copy the session ID, then click **Join** as Player. Paste that ID in each of the other windows and join as Player. Move with WASD or arrows, place a bomb with Space, and use slots 1-5. Movement and bombs should appear in the other windows. A fifth window can join as Spectator and observe but cannot control a player. To check isolation, create a second session and join it in another window. Team Battle accepts 4, 6, or 8 players; teams are assigned in pairs by join order. Unclaimed slots are stationary simulated players. Select **Local mode** to return to the single-player prototype.
 
 Run `npm.cmd test`, `npm.cmd run test:integration`, `npm.cmd run typecheck`, and `npm.cmd run build` to verify. The server listens only on `127.0.0.1:3001` by default, rejects non-loopback requests and non-local browser origins, and refuses to start with `NODE_ENV=production`. The development launcher is unauthenticated and must not be exposed publicly. It is not the final lobby or identity system.
 
