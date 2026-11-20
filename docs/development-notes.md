@@ -12,4 +12,8 @@ Bomb capacity and caps, explosion visual duration, propagation beyond destructib
 
 ## Phase 2 bomb defaults
 
-Bombs start with capacity 1 and range 1, with provisional capacity and range caps of 8. Blasts last 0.3 seconds visually and stop after destroying the first destructible wall. Further explosions have no effect on an already trapped player. These values are temporary; bomb settings are supplied through `BombConfig`. Bomb-to-player trapping is in place; rescue, team rules and match outcomes remain Phase 3 work.
+Bombs start with capacity 1 and range 1, with provisional capacity and range caps of 8. Blasts last 0.3 seconds visually and stop after destroying the first destructible wall. Further explosions have no effect on an already trapped player by default; `repeatedHit` can instead reset the timer or eliminate them. These values are temporary; bomb settings are supplied through `BombConfig`. Bomb-to-player trapping is in place.
+
+## Phase 3 match defaults
+
+A match can be created with an explicit FFA or team roster. With no match configuration, the one-player local prototype is an open-ended sandbox. Trapped players count as survivors; simultaneous enemy and teammate contact gives enemy contact priority. Eliminated players remain in snapshots for a future spectator client, but cannot move or place bombs. Client spectator controls and networking arrive in a later phase.

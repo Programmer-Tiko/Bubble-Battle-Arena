@@ -3,6 +3,7 @@ import type { GameSnapshot, MovementInput, TileType } from "@bubble/shared";
 import { LocalGameAdapter, type GameAdapter } from "./adapter";
 import "./style.css";
 
+const teamColors = [0x2c7de1, 0xf2a64a, 0xde5e78, 0x7b65d4, 0x3a9c73, 0xe6c744, 0x8b684e, 0x77899b];
 const colors: Record<TileType, number> = { floor: 0xcee9e3, indestructible: 0x34546a, destructible: 0xd59668 };
 
 class ArenaScene extends Phaser.Scene {
@@ -47,9 +48,10 @@ class ArenaScene extends Phaser.Scene {
       this.graphics.fillStyle(0x27408b);
       this.graphics.fillCircle((bomb.x + 0.5) * map.tileSize, (bomb.y + 0.5) * map.tileSize, 11);
     }
+    const teams = [...new Set(snapshot.players.map(player => player.teamId))].sort();
     for (const player of snapshot.players) {
       if (player.status === "eliminated") continue;
-      this.graphics.fillStyle(player.status === "trapped" ? 0x84e8ff : player.id === this.adapter.playerId ? 0x2c7de1 : 0xf2a64a);
+      this.graphics.fillStyle(player.status === "trapped" ? 0x84e8ff : teamColors[teams.indexOf(player.teamId) % teamColors.length]);
       this.graphics.fillCircle(player.x, player.y, 10);
       this.graphics.lineStyle(2, 0xffffff);
       this.graphics.strokeCircle(player.x, player.y, 10);
