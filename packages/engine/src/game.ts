@@ -1,10 +1,12 @@
-import type { BombState, GameSnapshot, GameState, MovementInput } from "@bubble/shared";
+import type { BombState, GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
 import { generateMap, type MapConfig } from "./map.js";
 import { DEFAULT_MOVEMENT_CONFIG, movePlayer, type MovementConfig } from "./movement.js";
 
 const IDLE: MovementInput = { up: false, down: false, left: false, right: false };
 /** Provisional values until the team agrees on limits and visual duration. */
 export interface MatchConfig { mode: "ffa" | "team"; teams?: Record<string, string>; timeLimitSeconds?: number }
+export interface ItemConfig { initialOtherPerType: number; chargesPerHazard: number }
+export const DEFAULT_ITEM_CONFIG: ItemConfig = { initialOtherPerType: 2, chargesPerHazard: 1 };
 export interface BombConfig { fuseSeconds: number; explosionSeconds: number; initialCapacity: number; maxCapacity: number; maxRange: number; stopAtDestructible: boolean; repeatedHit: "ignore" | "reset" | "eliminate" }
 export const DEFAULT_BOMB_CONFIG: BombConfig = { fuseSeconds: 3, explosionSeconds: 0.3, initialCapacity: 1, maxCapacity: 8, maxRange: 8, stopAtDestructible: true, repeatedHit: "ignore" };
 
@@ -14,11 +16,13 @@ export class Game {
   private inputs = new Map<string, MovementInput>();
   private movement: MovementConfig;
   private bombConfig: BombConfig;
+  private itemConfig: ItemConfig;
   private upgrades = new Map<string, { capacity: number; range: number }>();
   private nextBombId = 0;
+  private nextItemId = 0;
   private hitExplosions = new Map<number, Set<string>>();
   private match?: MatchConfig;
-  constructor(playerIds: string[], mapConfig: Partial<MapConfig> = {}, movementConfig: Partial<MovementConfig> = {}, bombConfig: Partial<BombConfig> = {}, match?: MatchConfig) {
+  constructor(playerIds: string[], mapConfig: Partial<MapConfig> = {}, movementConfig: Partial<MovementConfig> = {}, bombConfig: Partial<BombConfig> = {}, match?: MatchConfig, itemConfig: Partial<ItemConfig> = {}) {
     if (playerIds.length < 1 || playerIds.length > 8 || new Set(playerIds).size !== playerIds.length || playerIds.some(id => !id)) {
       throw new RangeError("Expected 1?8 distinct, nonempty player IDs");
     }
@@ -41,18 +45,69 @@ export class Game {
         !Number.isFinite(this.movement.playerRadius) || this.movement.playerRadius <= 0 || this.movement.playerRadius * 2 >= map.tileSize) {
       throw new RangeError("Invalid movement configuration");
     }
+    this.itemConfig = { ...DEFAULT_ITEM_CONFIG, ...itemConfig };
+    if (!Number.isInteger(this.itemConfig.initialOtherPerType) || this.itemConfig.initialOtherPerType < 0 || !Number.isInteger(this.itemConfig.chargesPerHazard) || this.itemConfig.chargesPerHazard < 1) throw new RangeError("Invalid item configuration");
     this.bombConfig = { ...DEFAULT_BOMB_CONFIG, ...bombConfig };
     const b = this.bombConfig;
     if (!Number.isFinite(b.fuseSeconds) || b.fuseSeconds <= 0 || !Number.isFinite(b.explosionSeconds) || b.explosionSeconds <= 0 ||
         !Number.isInteger(b.initialCapacity) || b.initialCapacity < 1 || !Number.isInteger(b.maxCapacity) || b.maxCapacity < b.initialCapacity ||
         !Number.isInteger(b.maxRange) || b.maxRange < 1 || typeof b.stopAtDestructible !== "boolean" || !["ignore", "reset", "eliminate"].includes(b.repeatedHit)) throw new RangeError("Invalid bomb configuration");
     for (const id of playerIds) this.upgrades.set(id, { capacity: b.initialCapacity, range: 1 });
-    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0 })) };
+    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [] };
+    // Provisional initial distribution: four boots and a configurable supply of other items.
+    const available = map.tiles.flat().filter(t => t.type === "floor" && !spawns.some(p => Math.abs(p.x - t.x) + Math.abs(p.y - t.y) <= 1));
+    for (const tile of map.tiles.flat()) if (tile.type === "floor" && !available.includes(tile)) available.push(tile);
+    const types: ItemType[] = ["boots", "boots", "boots", "boots"];
+    for (const type of ["capacity", "range", "banana", "slowdown"] as const) for (let i = 0; i < this.itemConfig.initialOtherPerType; i++) types.push(type);
+    for (const type of types) { const tile = available.shift(); if (tile) this.addItem(type, tile.x, tile.y, "pickup"); }
   }
   setInput(playerId: string, input: MovementInput): void {
     if (!this.state.players.some(p => p.id === playerId)) throw new RangeError("Unknown player");
     if ([input.up, input.down, input.left, input.right].some(value => typeof value !== "boolean")) throw new TypeError("Invalid movement input");
     this.inputs.set(playerId, { ...input });
+  }
+  private addItem(type: ItemType, x: number, y: number, kind: GroundItem["kind"], ownerId?: string): void {
+    this.state.items.push({ id: this.nextItemId++, type, x, y, kind, ownerId, active: kind !== "trap" });
+  }
+  /** Place one inventory charge on the current tile. Slots are zero-based. */
+  useItem(playerId: string, slot: number): boolean {
+    const p = this.state.players.find(p => p.id === playerId);
+    if (!p) throw new RangeError("Unknown player");
+    if (!Number.isInteger(slot) || slot < 0 || slot >= 5) throw new RangeError("Invalid slot");
+    const item = p.inventory[slot];
+    if (p.status !== "alive" || this.state.result || !item) return false;
+    const x = Math.floor(p.x / this.state.map.tileSize), y = Math.floor(p.y / this.state.map.tileSize);
+    if (this.state.items.some(i => i.x === x && i.y === y)) return false;
+    this.addItem(item.type, x, y, "trap", p.id);
+    if (--item.charges === 0) p.inventory[slot] = null;
+    return true;
+  }
+  private collect(p: GameState["players"][number], item: GroundItem): boolean {
+    if (item.type === "boots") p.boots++;
+    else if (item.type === "capacity") { if (p.capacityUpgrades >= this.bombConfig.maxCapacity - this.bombConfig.initialCapacity) return false; p.capacityUpgrades++; this.upgradeBomb(p.id, "capacity"); }
+    else if (item.type === "range") { if (p.rangeUpgrades >= this.bombConfig.maxRange - 1) return false; p.rangeUpgrades++; this.upgradeBomb(p.id, "range"); }
+    else {
+      const index = p.inventory.findIndex(s => s?.type === item.type);
+      const empty = p.inventory.findIndex(s => s === null);
+      const target = index >= 0 ? index : empty;
+      if (target < 0) return false;
+      const type = item.type as TrapType;
+      if (!p.inventory[target]) p.inventory[target] = { type, charges: 0 };
+      p.inventory[target]!.charges += type === "banana" ? 2 : 5;
+    }
+    return true;
+  }
+  private dropItems(p: GameState["players"][number]): void {
+    const types: { type: ItemType; kind: GroundItem["kind"] }[] = [];
+    for (const [type, count] of [["boots", p.boots], ["capacity", p.capacityUpgrades], ["range", p.rangeUpgrades]] as const)
+      for (let i = 0; i < count; i++) types.push({ type, kind: "pickup" });
+    for (const slot of p.inventory) if (slot) for (let i = 0; i < slot.charges; i += this.itemConfig.chargesPerHazard) types.push({ type: slot.type, kind: "hazard" });
+    const size = this.state.map.tileSize, px = Math.floor(p.x / size), py = Math.floor(p.y / size);
+    const tiles = this.state.map.tiles.flat().filter(t => t.type === "floor" && !this.state.bombs.some(b => b.x === t.x && b.y === t.y) && !this.state.items.some(i => i.x === t.x && i.y === t.y) && !this.state.players.some(other => other.status !== "eliminated" && Math.floor(other.x / size) === t.x && Math.floor(other.y / size) === t.y))
+      .sort((a, b) => (Math.abs(a.x-px)+Math.abs(a.y-py)) - (Math.abs(b.x-px)+Math.abs(b.y-py)) || a.y-b.y || a.x-b.x);
+    // Multiple drops share valid tiles when there are more drops than free tiles.
+    for (let i = 0; i < types.length && tiles.length; i++) this.addItem(types[i].type, tiles[i % tiles.length].x, tiles[i % tiles.length].y, types[i].kind);
+    p.boots = p.capacityUpgrades = p.rangeUpgrades = 0; p.inventory = Array(5).fill(null);
   }
   /** Upgrade hooks for the later item system. */
   upgradeBomb(playerId: string, kind: "capacity" | "range"): void {
@@ -97,7 +152,18 @@ export class Game {
   step(): void {
     if (this.state.result) return;
     const before = this.state.players.map(p => ({ ...p }));
-    this.state.players = this.state.players.map(p => p.status === "alive" ? movePlayer(p, this.inputs.get(p.id) ?? IDLE, this.state.map, this.movement) : p);
+    this.state.players = this.state.players.map(p => {
+      if (p.status !== "alive") return p;
+      const input = p.slide ?? this.inputs.get(p.id) ?? IDLE;
+      if (!p.slide && (Number(input.right) !== Number(input.left) || Number(input.down) !== Number(input.up))) p.direction = { ...input };
+      const speed = this.movement.speed * (p.slowSeconds > 0 ? 0.5 : 1 + p.boots * 0.1);
+      // Bombs are solid during forced slides; the starting tile remains escapable.
+      const map = p.slide ? structuredClone(this.state.map) : this.state.map;
+      if (p.slide) for (const b of this.state.bombs) if (Math.floor(p.x / map.tileSize) !== b.x || Math.floor(p.y / map.tileSize) !== b.y) map.tiles[b.y][b.x].type = "indestructible";
+      const moved = movePlayer(p, input, map, { ...this.movement, speed });
+      if (p.slide && Math.hypot(moved.x-p.x, moved.y-p.y) + 1e-8 < speed * this.movement.timestepSeconds) moved.slide = null;
+      return moved;
+    });
     const dt = this.movement.timestepSeconds;
     this.state.explosions = this.state.explosions.filter(e => (e.remainingSeconds -= dt) > 1e-9);
     for (const bomb of this.state.bombs) bomb.remainingSeconds -= dt;
@@ -121,6 +187,29 @@ export class Game {
         else if (player.status === "trapped" && this.bombConfig.repeatedHit === "eliminate") player.status = "eliminated";
       }
     }
+    for (const p of this.state.players) {
+      if (p.slowSeconds > 0) p.slowSeconds = Math.max(0, p.slowSeconds - dt);
+      if (p.status !== "alive") p.slide = null;
+      const x = Math.floor(p.x / this.state.map.tileSize), y = Math.floor(p.y / this.state.map.tileSize);
+      for (const item of [...this.state.items]) {
+        if (item.kind === "trap" && !item.active && item.ownerId === p.id && (item.x !== x || item.y !== y)) item.active = true;
+      }
+    }
+    for (const p of this.state.players) {
+      if (p.status !== "alive") continue;
+      const x = Math.floor(p.x / this.state.map.tileSize), y = Math.floor(p.y / this.state.map.tileSize);
+      for (const item of [...this.state.items]) {
+        if (item.x !== x || item.y !== y || !item.active) continue;
+        if (item.kind === "pickup") { if (!this.collect(p, item)) continue; }
+        else if (item.type === "slowdown") p.slowSeconds = 10;
+        else if (item.type === "banana") {
+          const input = p.slide ?? this.inputs.get(p.id) ?? IDLE;
+          p.slide = (Number(input.right) !== Number(input.left) || Number(input.down) !== Number(input.up)) ? { ...input } : { ...p.direction };
+          if (!p.slide.up && !p.slide.down && !p.slide.left && !p.slide.right) p.slide = null;
+        }
+        this.state.items = this.state.items.filter(i => i.id !== item.id);
+      }
+    }
     const activeExplosions = new Set(this.state.explosions.map(e => e.id));
     for (const id of this.hitExplosions.keys()) if (!activeExplosions.has(id)) this.hitExplosions.delete(id);
     // Resolve contact using the whole movement segment; enemy contact takes priority.
@@ -137,6 +226,7 @@ export class Game {
       if (contacts.some(p => p.teamId !== target.teamId)) target.status = "eliminated";
       else if (contacts.some(p => p.teamId === target.teamId)) { target.status = "alive"; target.trappedSeconds = 0; }
     }
+    for (const p of this.state.players) if (p.status === "eliminated" && before.find(old => old.id === p.id)?.status !== "eliminated") this.dropItems(p);
     this.state.tick++;
     this.state.elapsedSeconds = this.state.tick * dt;
     if (this.match) {
