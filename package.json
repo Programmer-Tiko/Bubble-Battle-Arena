@@ -3,13 +3,16 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "frontend"
+    "frontend",
+    "services/*"
   ],
   "scripts": {
-    "build": "tsc -b packages/shared packages/engine && npm run build --workspace @bubble/frontend",
+    "build": "tsc -b packages/shared packages/engine services/game && npm run build --workspace @bubble/frontend",
     "test": "vitest run",
-    "typecheck": "tsc -b packages/shared packages/engine --pretty false && npm run typecheck --workspace @bubble/frontend",
-    "dev": "tsc -b packages/shared packages/engine && npm run dev --workspace @bubble/frontend"
+    "typecheck": "tsc -b packages/shared packages/engine services/game --pretty false && npm run typecheck --workspace @bubble/frontend",
+    "dev": "tsc -b packages/shared packages/engine && npm run dev --workspace @bubble/frontend",
+    "server": "tsc -b packages/shared packages/engine services/game && node services/game/dist/index.js",
+    "test:integration": "vitest run services/game/tests"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

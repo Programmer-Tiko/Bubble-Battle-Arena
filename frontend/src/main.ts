@@ -1,13 +1,38 @@
 import Phaser from "phaser";
 import type { GameSnapshot, MovementInput, TileType } from "@bubble/shared";
 import { LocalGameAdapter, type GameAdapter } from "./adapter";
+import { NetworkGameAdapter } from "./network";
 import "./style.css";
 
 const teamColors = [0x2c7de1, 0xf2a64a, 0xde5e78, 0x7b65d4, 0x3a9c73, 0xe6c744, 0x8b684e, 0x77899b];
 const colors: Record<TileType, number> = { floor: 0xcee9e3, indestructible: 0x34546a, destructible: 0xd59668 };
 
+let adapter: GameAdapter = new LocalGameAdapter();
+let network: NetworkGameAdapter | undefined;
+const status = document.querySelector<HTMLElement>("#status")!;
+const notice = document.querySelector<HTMLElement>("#notice")!;
+const sessionField = document.querySelector<HTMLInputElement>("#session")!;
+const modeField = document.querySelector<HTMLSelectElement>("#mode")!;
+const countField = document.querySelector<HTMLSelectElement>("#players")!;
+const roleField = document.querySelector<HTMLSelectElement>("#role")!;
+const server = "http://127.0.0.1:3001";
+document.querySelector<HTMLButtonElement>("#create-session")!.onclick = async () => {
+  try {
+    const response = await fetch(`${server}/dev/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: modeField.value, players: Number(countField.value) }) });
+    const body = await response.json(); if (!response.ok) throw new Error(body.error);
+    sessionField.value = body.sessionId; notice.textContent = "Session created. Share its ID, then join.";
+  } catch (error) { notice.textContent = `Create failed: ${String(error)}`; }
+};
+document.querySelector<HTMLButtonElement>("#join-session")!.onclick = async () => {
+  try {
+    notice.textContent = "Connecting...";
+    const next = await NetworkGameAdapter.connect(server, sessionField.value.trim(), roleField.value === "spectator" ? "spectator" : "player");
+    network?.close(); network = next; adapter = next; (document.activeElement as HTMLElement | null)?.blur(); notice.textContent = "Joined session.";
+  } catch (error) { notice.textContent = `Join failed: ${String(error)}`; }
+};
+document.querySelector<HTMLButtonElement>("#local-mode")!.onclick = () => { network?.close(); network = undefined; adapter = new LocalGameAdapter(); notice.textContent = "Local mode selected."; };
+
 class ArenaScene extends Phaser.Scene {
-  private readonly adapter: GameAdapter = new LocalGameAdapter();
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private graphics!: Phaser.GameObjects.Graphics;
   private hud!: Phaser.GameObjects.Text;
@@ -19,22 +44,28 @@ class ArenaScene extends Phaser.Scene {
     this.input.keyboard.addCapture(["UP", "DOWN", "LEFT", "RIGHT"]);
     this.graphics = this.add.graphics();
     this.hud = this.add.text(5, 5, "", { fontSize: "13px", color: "#ffffff", backgroundColor: "#132633" }).setScrollFactor(0).setDepth(1);
-    const { map } = this.adapter.snapshot();
+    const { map } = adapter.snapshot();
     this.cameras.main.setBounds(0, 0, map.width * map.tileSize, map.height * map.tileSize);
-    this.renderSnapshot(this.adapter.snapshot());
+    this.renderSnapshot(adapter.snapshot());
   }
   update(_time: number, delta: number): void {
+    const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement;
     const input: MovementInput = {
-      up: this.keys.W.isDown || this.keys.UP.isDown,
-      down: this.keys.S.isDown || this.keys.DOWN.isDown,
-      left: this.keys.A.isDown || this.keys.LEFT.isDown,
-      right: this.keys.D.isDown || this.keys.RIGHT.isDown,
+      up: !typing && (this.keys.W.isDown || this.keys.UP.isDown),
+      down: !typing && (this.keys.S.isDown || this.keys.DOWN.isDown),
+      left: !typing && (this.keys.A.isDown || this.keys.LEFT.isDown),
+      right: !typing && (this.keys.D.isDown || this.keys.RIGHT.isDown),
     };
-    if (Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) this.adapter.placeBomb();
-    ["ONE", "TWO", "THREE", "FOUR", "FIVE"].forEach((key, index) => { if (Phaser.Input.Keyboard.JustDown(this.keys[key])) this.adapter.useItem(index); });
-    this.adapter.setInput(input);
-    this.adapter.advance(delta);
-    this.renderSnapshot(this.adapter.snapshot());
+    if (!typing && Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) adapter.placeBomb();
+    ["ONE", "TWO", "THREE", "FOUR", "FIVE"].forEach((key, index) => { if (!typing && Phaser.Input.Keyboard.JustDown(this.keys[key])) adapter.useItem(index); });
+    adapter.setInput(input);
+    adapter.advance(delta);
+    const snapshot = adapter.snapshot();
+    const player = snapshot.players.find(p => p.id === adapter.playerId);
+    const remaining = Math.max(0, 600 - snapshot.elapsedSeconds);
+    const result = snapshot.result ? (snapshot.result.kind === "draw" ? "Draw" : `Winner: ${snapshot.result.teamId}`) : "";
+    status.textContent = `${network ? network.status : "Local mode"} | ${network && !network.playerId ? "Spectator" : player?.status === "eliminated" ? "Spectator (eliminated)" : `Player ${adapter.playerId} / ${player?.teamId ?? ""}`} | ${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")} ${result}`;
+    this.renderSnapshot(snapshot);
   }
   private renderSnapshot(snapshot: GameSnapshot): void {
     const { map } = snapshot;
@@ -70,7 +101,7 @@ class ArenaScene extends Phaser.Scene {
       this.graphics.lineStyle(2, 0x66452b); this.graphics.lineBetween(x - 9, y + 15, x - 5, y + 25); this.graphics.lineBetween(x + 9, y + 15, x + 5, y + 25);
       this.graphics.fillStyle(0x8b5c38); this.graphics.fillRect(x - 7, y + 23, 14, 8);
     }
-    const local = snapshot.players.find(p => p.id === this.adapter.playerId);
+    const local = snapshot.players.find(p => p.id === adapter.playerId);
     this.hud.setText(local ? local.inventory.map((slot, i) => `${i + 1}: ${slot ? `${slot.type} x${slot.charges}` : "-"}`).join("  ") : "");
     for (const bomb of snapshot.bombs) {
       this.graphics.fillStyle(0x27408b);
