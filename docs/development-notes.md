@@ -9,3 +9,7 @@ The existing map dimensions, densities, spawn spacing, movement speed, and playe
 ## Remaining rule decisions
 
 Bomb capacity and caps, explosion visual duration, propagation beyond destructible walls, repeated explosions on trapped players, item-drop probability, scattering of inventory charges, and supply drops on occupied player tiles are unresolved in the README and must be configurable temporary defaults when implemented.
+
+## Phase 2 bomb defaults
+
+Bombs start with capacity 1 and range 1, with provisional capacity and range caps of 8. Blasts last 0.3 seconds visually and stop after destroying the first destructible wall. Further explosions have no effect on an already trapped player. These values are temporary; bomb settings are supplied through `BombConfig`. Bomb-to-player trapping is in place; rescue, team rules and match outcomes remain Phase 3 work.

@@ -2,7 +2,7 @@
 
 **A real-time multiplayer water-balloon battle game inspired by Crazy Arcade (BnB) and classic Bomberman-style arena gameplay.**
 
-> **Status:** A headless movement engine and local Phaser movement prototype are implemented. Multiplayer, gameplay mechanics, authentication, and deployment remain planned. This README records the agreed game design and proposed architecture for the University at Buffalo CSE 312 team project.
+> **Status:** A headless engine and local Phaser prototype implement movement and bombs. Multiplayer, remaining gameplay mechanics, authentication, and deployment remain planned. This README records the agreed game design and proposed architecture for the University at Buffalo CSE 312 team project.
 
 ## 1. Project Overview
 
@@ -312,7 +312,7 @@ npm install
 npm run dev
 ```
 
-Open the local Vite URL shown in the terminal. Move with WASD or the arrow keys. This is a single-player prototype, not the multiplayer or authentication system. Run `npm test`, `npm run typecheck`, and `npm run build` for verification. See [development notes](docs/development-notes.md) for temporary decisions.
+Open the local Vite URL shown in the terminal. Move with WASD or the arrow keys and place a bomb with Space. This is a single-player prototype, not the multiplayer or authentication system. Run `npm test`, `npm run typecheck`, and `npm run build` for verification. See [development notes](docs/development-notes.md) for temporary decisions.
 
 The future deployment must specify any additional configuration and support the following required local workflow:
 

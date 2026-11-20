@@ -13,7 +13,7 @@ class ArenaScene extends Phaser.Scene {
   constructor() { super("arena"); }
   create(): void {
     if (!this.input.keyboard) throw new Error("Keyboard input is unavailable");
-    this.keys = this.input.keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT") as Record<string, Phaser.Input.Keyboard.Key>;
+    this.keys = this.input.keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE") as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard.addCapture(["UP", "DOWN", "LEFT", "RIGHT"]);
     this.graphics = this.add.graphics();
     const { map } = this.adapter.snapshot();
@@ -27,6 +27,7 @@ class ArenaScene extends Phaser.Scene {
       left: this.keys.A.isDown || this.keys.LEFT.isDown,
       right: this.keys.D.isDown || this.keys.RIGHT.isDown,
     };
+    if (Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) this.adapter.placeBomb();
     this.adapter.setInput(input);
     this.adapter.advance(delta);
     this.renderSnapshot(this.adapter.snapshot());
@@ -38,8 +39,17 @@ class ArenaScene extends Phaser.Scene {
       this.graphics.fillStyle(colors[tile.type]);
       this.graphics.fillRect(tile.x * map.tileSize, tile.y * map.tileSize, map.tileSize - 1, map.tileSize - 1);
     }
+    for (const explosion of snapshot.explosions) {
+      this.graphics.fillStyle(0x88e9ff, 0.8);
+      this.graphics.fillRect(explosion.x * map.tileSize + 3, explosion.y * map.tileSize + 3, map.tileSize - 6, map.tileSize - 6);
+    }
+    for (const bomb of snapshot.bombs) {
+      this.graphics.fillStyle(0x27408b);
+      this.graphics.fillCircle((bomb.x + 0.5) * map.tileSize, (bomb.y + 0.5) * map.tileSize, 11);
+    }
     for (const player of snapshot.players) {
-      this.graphics.fillStyle(player.id === this.adapter.playerId ? 0x2c7de1 : 0xf2a64a);
+      if (player.status === "eliminated") continue;
+      this.graphics.fillStyle(player.status === "trapped" ? 0x84e8ff : player.id === this.adapter.playerId ? 0x2c7de1 : 0xf2a64a);
       this.graphics.fillCircle(player.x, player.y, 10);
       this.graphics.lineStyle(2, 0xffffff);
       this.graphics.strokeCircle(player.x, player.y, 10);

@@ -5,6 +5,7 @@ import type { GameSnapshot, MovementInput } from "@bubble/shared";
 export interface GameAdapter {
   readonly playerId: string;
   setInput(input: MovementInput): void;
+  placeBomb(): void;
   advance(deltaMs: number): void;
   snapshot(): GameSnapshot;
 }
@@ -16,6 +17,7 @@ export class LocalGameAdapter implements GameAdapter {
   private accumulatedMs = 0;
   private readonly tickMs = DEFAULT_MOVEMENT_CONFIG.timestepSeconds * 1000;
   setInput(input: MovementInput): void { this.game.setInput(this.playerId, input); }
+  placeBomb(): void { this.game.placeBomb(this.playerId); }
   advance(deltaMs: number): void {
     // Avoid simulating a long tab suspension on return.
     this.accumulatedMs += Math.max(0, Math.min(deltaMs, 250));

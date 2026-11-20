@@ -7,7 +7,7 @@ const movement = { speed: 10, playerRadius: 1, timestepSeconds: 1 };
 function openMap(): ArenaMap {
   return { width: 7, height: 7, tileSize: 10, tiles: Array.from({ length: 7 }, (_, y) => Array.from({ length: 7 }, (_, x) => ({ x, y, type: "floor" as TileType }))) };
 }
-const player = { id: "p", x: 25, y: 25 };
+const player = { id: "p", x: 25, y: 25, status: "alive" as const, trappedSeconds: 0 };
 
 describe("map generation", () => {
   it("creates the configured grid and an indestructible border", () => {
