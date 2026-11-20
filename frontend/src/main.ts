@@ -49,9 +49,26 @@ class ArenaScene extends Phaser.Scene {
     }
     const itemColors = { boots: 0x52bd65, capacity: 0x7266df, range: 0xf39843, banana: 0xffdf41, slowdown: 0xe25f7b };
     for (const item of snapshot.items) {
+      if (item.supplyDroppedAt !== undefined) {
+        const age = snapshot.elapsedSeconds - item.supplyDroppedAt;
+        if (age >= 0 && age < 3) {
+          const x = (item.x + 0.5) * map.tileSize, y = (item.y + 0.5) * map.tileSize;
+          this.graphics.lineStyle(2, 0xffffff, 1 - age / 3);
+          this.graphics.strokeCircle(x, y, 12 + age * 3);
+          if (age < 1) { this.graphics.fillStyle(0xffffff, 0.9); this.graphics.fillCircle(x, y - (1 - age) * 25, 3); }
+        }
+      }
       this.graphics.fillStyle(itemColors[item.type], item.kind === "trap" && !item.active ? 0.5 : 1);
       this.graphics.fillRect(item.x * map.tileSize + 9, item.y * map.tileSize + 9, 14, 14);
       if (item.kind !== "pickup") { this.graphics.lineStyle(2, 0x222222); this.graphics.strokeRect(item.x * map.tileSize + 9, item.y * map.tileSize + 9, 14, 14); }
+    }
+    if (snapshot.balloon) {
+      const progress = Math.max(0, Math.min(1, (snapshot.elapsedSeconds - snapshot.balloon.startedAt) / snapshot.balloon.durationSeconds));
+      const x = -20 + progress * (map.width * map.tileSize + 40), y = map.tileSize * 1.5;
+      this.graphics.fillStyle(0xe75e58); this.graphics.fillEllipse(x, y, 30, 38);
+      this.graphics.fillStyle(0xffd06c); this.graphics.fillEllipse(x, y, 12, 37);
+      this.graphics.lineStyle(2, 0x66452b); this.graphics.lineBetween(x - 9, y + 15, x - 5, y + 25); this.graphics.lineBetween(x + 9, y + 15, x + 5, y + 25);
+      this.graphics.fillStyle(0x8b5c38); this.graphics.fillRect(x - 7, y + 23, 14, 8);
     }
     const local = snapshot.players.find(p => p.id === this.adapter.playerId);
     this.hud.setText(local ? local.inventory.map((slot, i) => `${i + 1}: ${slot ? `${slot.type} x${slot.charges}` : "-"}`).join("  ") : "");
