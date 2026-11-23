@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { Server } from "socket.io";
 import { DEFAULT_MOVEMENT_CONFIG, Game } from "@bubble/engine";
-import { BotController } from "@bubble/bot";
+import { BotController, type BotCommand, type BotDifficulty } from "@bubble/bot";
 import type { ClientEvents, ServerEvents, MovementInput, SessionMode, Reply, GameSnapshot } from "@bubble/shared";
 
 const idle: MovementInput = { up: false, down: false, left: false, right: false };
@@ -15,8 +15,8 @@ const localOrigin = (origin: string | undefined) => !origin || /^http:\/\/(local
 const loopback = (address: string | undefined) => address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 const localHost = (host: string | undefined) => !!host && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
 
-export interface ServerOptions { snapshotEveryTicks?: number; staleInputMs?: number; autoTick?: boolean; now?: () => number; environment?: string; maxSessions?: number; maxConnections?: number; maxMembersPerSession?: number; emptySessionMs?: number; completedSessionMs?: number; cleanupIntervalMs?: number; joinTimeoutMs?: number }
-interface Slot { id: string; claimed: boolean; socketId?: string; lastInputAt: number; bot?: BotController }
+export interface ServerOptions { snapshotEveryTicks?: number; staleInputMs?: number; autoTick?: boolean; now?: () => number; environment?: string; maxSessions?: number; maxConnections?: number; maxMembersPerSession?: number; emptySessionMs?: number; completedSessionMs?: number; cleanupIntervalMs?: number; joinTimeoutMs?: number; botDebug?: boolean }
+interface Slot { id: string; claimed: boolean; socketId?: string; lastInputAt: number; bot?: BotController; botCommand?: BotCommand }
 export interface Session { id: string; game: Game; slots: Slot[]; timer?: ReturnType<typeof setInterval>; completed: boolean; completedAt?: number; emptySince: number; members: Set<string>; snapshot: GameSnapshot }
 
 /** Development launcher only. Replace the join boundary with verified identity/room authorization for production. */
@@ -33,19 +33,20 @@ export function createGameServer(options: ServerOptions = {}) {
   app.use((req, res, next) => {
     if (req.headers.origin) { res.setHeader("Access-Control-Allow-Origin", req.headers.origin); res.setHeader("Vary", "Origin"); }
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     if (req.method === "OPTIONS") { res.sendStatus(204); return; } next();
   });
   app.use(express.json({ limit: "1kb", strict: true }));
   const http = createServer(app);
   const io = new Server<ClientEvents, ServerEvents>(http, { transports: ["websocket"], maxHttpBufferSize: 1024, perMessageDeflate: { threshold: 1024 }, cors: { origin: (origin, cb) => cb(null, localOrigin(origin)) }, allowRequest: (req, cb) => cb(null, loopback(req.socket.remoteAddress) && localHost(req.headers.host) && localOrigin(req.headers.origin) && io.engine.clientsCount < maxConnections) });
   const sessions = new Map<string, Session>();
-  const create = (mode: SessionMode, count: number, botCount = 0): Session => {
+  const create = (mode: SessionMode, count: number, botCount = 0, difficulty: BotDifficulty = "normal"): Session => {
     if ((mode !== "ffa" && mode !== "team") || !Number.isInteger(count) || count < 4 || count > 8 || (mode === "team" && count % 2)) throw new RangeError("Invalid roster");
     if (!Number.isInteger(botCount) || botCount < 0 || botCount > count) throw new RangeError("Invalid bot count");
+    if (!["easy", "normal", "hard"].includes(difficulty)) throw new RangeError("Invalid bot difficulty");
     if (sessions.size >= maxSessions) throw new Error("Session capacity reached");
     const slots: Slot[] = Array.from({ length: count }, () => ({ id: randomUUID(), claimed: false, lastInputAt: 0 }));
-    slots.forEach((slot, i) => { if (i >= count - botCount) { slot.claimed = true; slot.bot = new BotController(slot.id, i); } });
+    slots.forEach((slot, i) => { if (i >= count - botCount) { slot.claimed = true; slot.bot = new BotController(slot.id, i, difficulty); } });
     const teams = Object.fromEntries(slots.map((slot, i) => [slot.id, `team-${Math.floor(i / 2) + 1}`]));
     const game = new Game(slots.map(s => s.id), {}, {}, {}, { mode, teams });
     const session: Session = { id: randomUUID(), game, slots, completed: false, emptySince: now(), members: new Set(), snapshot: game.getSnapshot() };
@@ -70,6 +71,7 @@ export function createGameServer(options: ServerOptions = {}) {
     for (let i = 0; i < bots.length; i++) {
       const slot = bots[i];
       const decision = slot.bot!.update(session.game.getSnapshot(), session.snapshot.tick % bots.length === i);
+      slot.botCommand = decision;
       session.game.setInput(slot.id, decision.input);
       if (decision.placeBomb) session.game.placeBomb(slot.id);
     }
@@ -91,10 +93,16 @@ export function createGameServer(options: ServerOptions = {}) {
   cleanupTimer.unref();
   app.post("/dev/sessions", (req, res) => {
     const value: unknown = req.body;
-    if (!isRecord(value) || !(exact(value, ["mode", "players"]) || exact(value, ["mode", "players", "bots"])) || (value.mode !== "ffa" && value.mode !== "team") || typeof value.players !== "number" || (value.bots !== undefined && typeof value.bots !== "number")) { res.status(400).json({ error: "Invalid session request" }); return; }
+    if (!isRecord(value) || Object.keys(value).some(k => !["mode", "players", "bots", "difficulty"].includes(k)) || (value.mode !== "ffa" && value.mode !== "team") || typeof value.players !== "number" || (value.bots !== undefined && typeof value.bots !== "number") || (value.difficulty !== undefined && !["easy", "normal", "hard"].includes(String(value.difficulty)))) { res.status(400).json({ error: "Invalid session request" }); return; }
     if (sessions.size >= maxSessions) { res.status(503).json({ error: "Session capacity reached" }); return; }
-    try { const session = create(value.mode, value.players, value.bots as number | undefined); res.status(201).json({ sessionId: session.id }); }
+    try { const session = create(value.mode, value.players, value.bots as number | undefined, value.difficulty as BotDifficulty | undefined); res.status(201).json({ sessionId: session.id }); }
     catch { res.status(400).json({ error: "Invalid roster" }); }
+  });
+  if (options.botDebug === true) app.get("/dev/sessions/:id/bot-debug", (req, res) => {
+    const session = sessions.get(req.params.id);
+    if (!session) { res.sendStatus(404); return; }
+    const snapshot = session.game.getSnapshot();
+    res.json(session.slots.filter(s => s.bot && s.botCommand).map(s => s.bot!.debug(snapshot, s.botCommand!)));
   });
   io.on("connection", socket => {
     const joinTimer = setTimeout(() => socket.disconnect(true), joinMs); joinTimer.unref();

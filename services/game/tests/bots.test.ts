@@ -80,6 +80,12 @@ describe("server-controlled bots", () => {
     s.map.tiles[5][6].type = "destructible";
     steps(session, 1); expect(session.game.getSnapshot().bombs).toHaveLength(0);
   });
+  it("hard difficulty also protects nearby teammate escape tiles", () => {
+    const session = server.create("team", 4, 1, "hard"), s = openArena(session), bot = s.players[3], size = s.map.tileSize;
+    bot.x = 5.5 * size; bot.y = 5.5 * size;
+    s.players[2].x = 4.5 * size; s.players[2].y = 4.5 * size; s.map.tiles[5][6].type = "destructible";
+    steps(session, 1); expect(session.game.getSnapshot().bombs).toHaveLength(0);
+  });
   it("refuses an inescapable bomb and never acts while trapped or eliminated", () => {
     const session = server.create("ffa", 4, 1), s = openArena(session), bot = s.players[3], size = s.map.tileSize;
     bot.x = 5.5 * size; bot.y = 5.5 * size;
@@ -115,5 +121,29 @@ describe("server-controlled bots", () => {
     expect((await request({ mode: "ffa", players: 4, bots: -1 })).status).toBe(400);
     expect((await request({ mode: "ffa", players: 4, bots: 1.5 })).status).toBe(400);
     expect((await request({ mode: "team", players: 5, bots: 2 })).status).toBe(400);
+    expect((await request({ mode: "ffa", players: 4, bots: 1, difficulty: "impossible" })).status).toBe(400);
+  });
+  it.each(["easy", "normal", "hard"] as const)("uses normal game rules at %s difficulty", difficulty => {
+    const session = server.create("ffa", 4, 1, difficulty), s = openArena(session), bot = s.players[3], size = s.map.tileSize;
+    bot.x = 5.5 * size; bot.y = 5.5 * size; s.map.tiles[5][6].type = "destructible";
+    steps(session, 1); const snapshot = session.game.getSnapshot(), bomb = snapshot.bombs.find(b => b.ownerId === bot.id);
+    expect(bomb).toBeDefined(); expect(bomb!.range).toBe(1); expect(bomb!.remainingSeconds).toBeCloseTo(3 - 1 / 30);
+    steps(session, 100); expect(session.game.getSnapshot().players[3].status).toBe("alive");
+  });
+  it("exposes actual controller data only when debug is enabled", async () => {
+    const ordinary = server.create("ffa", 4, 1); steps(ordinary, 1);
+    expect((await fetch(`${url}/dev/sessions/${ordinary.id}/bot-debug`)).status).toBe(404);
+    const debugServer = createGameServer({ autoTick: false, botDebug: true });
+    await new Promise<void>(resolve => debugServer.http.listen(0, "127.0.0.1", resolve));
+    try {
+      const addr = debugServer.http.address(); if (!addr || typeof addr === "string") throw new Error("No address");
+      const session = debugServer.create("ffa", 4, 1); debugServer.tick(session);
+      const response = await fetch(`http://127.0.0.1:${addr.port}/dev/sessions/${session.id}/bot-debug`);
+      const data = await response.json(), slot = session.slots[3], player = session.game.getSnapshot().players[3];
+      expect(data).toHaveLength(1); expect(data[0].playerId).toBe(slot.id);
+      expect(data[0].state).toBe(slot.botCommand?.state); expect(data[0].reason).toBe(slot.botCommand?.reason);
+      expect(data[0].position).toEqual({ x: player.x, y: player.y });
+      expect(data[0].path).toEqual(slot.bot!.debug(session.game.getSnapshot(), slot.botCommand!).path);
+    } finally { await debugServer.close(); }
   });
 });

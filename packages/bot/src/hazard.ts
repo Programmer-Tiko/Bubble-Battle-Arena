@@ -64,6 +64,14 @@ export class HazardMap {
     return (this.danger.get(key(x, y)) ?? []).some(i => i.start <= end && i.end > start);
   }
 
+  /** Detached intervals for development inspection. */
+  intervals(): { x: number; y: number; start: number; end: number }[] {
+    return [...this.danger].flatMap(([key, intervals]) => {
+      const [x, y] = key.split(",").map(Number);
+      return intervals.map(i => ({ x, y, ...i }));
+    });
+  }
+
   /** Half-open safe intervals within [0, horizon). */
   getSafeIntervals(x: number, y: number, horizon: number): Interval[] {
     if (!Number.isFinite(horizon) || horizon < 0) throw new RangeError("Invalid horizon");

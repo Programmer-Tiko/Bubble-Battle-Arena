@@ -1,9 +1,15 @@
 import { DEFAULT_BOMB_CONFIG, DEFAULT_MOVEMENT_CONFIG } from "@bubble/engine";
 import type { GameSnapshot, MovementInput, PlayerState } from "@bubble/shared";
 import { HazardMap } from "./hazard.js";
-import { findPath, type Waypoint } from "./pathfinding.js";
+import { findPath, type SearchOptions, type Waypoint } from "./pathfinding.js";
 
 export type BotState = "ESCAPE" | "COLLECT_ITEM" | "APPROACH_OPPONENT" | "ATTACK" | "WAIT" | "TRAPPED" | "ELIMINATED";
+export type BotDifficulty = "easy" | "normal" | "hard";
+const levels = {
+  easy: { interval: 36, horizon: 3.6, threat: 3.4, escapeUntil: 3.6, goals: 1, nodes: 220, escapeNodes: 350 },
+  normal: { interval: 18, horizon: 5, threat: 3.8, escapeUntil: 4, goals: 3, nodes: 350, escapeNodes: 500 },
+  hard: { interval: 9, horizon: 6.5, threat: 4.3, escapeUntil: 4.8, goals: 5, nodes: 500, escapeNodes: 700 },
+} as const;
 export interface BotCommand { input: MovementInput; placeBomb: boolean; state: BotState; reason: string }
 const idle = (): MovementInput => ({ up: false, down: false, left: false, right: false });
 const tile = (p: { x: number; y: number }, size: number) => ({ x: Math.floor(p.x / size), y: Math.floor(p.y / size) });
@@ -20,7 +26,28 @@ export class BotController {
   private stuck = 0;
   private state: BotState = "WAIT";
   private reason = "Waiting";
-  constructor(readonly playerId: string, private readonly phase = 0) {}
+  private counters = { searches: 0, expanded: 0, exhausted: 0 };
+  constructor(readonly playerId: string, private readonly phase = 0, readonly difficulty: BotDifficulty = "normal") {
+    if (!Object.hasOwn(levels, difficulty)) throw new RangeError("Invalid bot difficulty");
+  }
+
+  metrics() { return { ...this.counters }; }
+
+  private search(snapshot: GameSnapshot, player: PlayerState, goal: { x: number; y: number }, hazards: HazardMap, options: SearchOptions) {
+    const result = findPath(snapshot, player, goal, hazards, options);
+    this.counters.searches++; this.counters.expanded += result.expanded; this.counters.exhausted += Number(result.exhausted);
+    return result;
+  }
+
+  /** Current execution plan, detached so a debugging consumer cannot mutate it. */
+  debug(snapshot: GameSnapshot, command: BotCommand) {
+    const player = snapshot.players.find(p => p.id === this.playerId);
+    const paused = command.reason === "Waiting for a safe replan" || command.state === "TRAPPED" || command.state === "ELIMINATED";
+    const path = paused ? [] : this.path.map(p => ({ ...p }));
+    return { playerId: this.playerId, position: player ? { x: player.x, y: player.y } : null,
+      state: command.state, reason: command.reason, path, destination: path.at(-1) ?? null,
+      danger: new HazardMap(snapshot).intervals(), tick: snapshot.tick };
+  }
 
   private centeringDelay(snapshot: GameSnapshot, player: PlayerState): number {
     const size = snapshot.map.tileSize, here = tile(player, size);
@@ -30,8 +57,8 @@ export class BotController {
 
   private escape(snapshot: GameSnapshot, player: PlayerState, hazards: HazardMap, safeUntil: number): Waypoint[] {
     const start = tile(player, snapshot.map.tileSize);
-    const result = findPath(snapshot, player, start, hazards, {
-      horizonSeconds: Math.min(5, safeUntil), maxNodes: 500, stepSeconds: 0.1, initialDelaySeconds: this.centeringDelay(snapshot, player),
+    const result = this.search(snapshot, player, start, hazards, {
+      horizonSeconds: Math.min(levels[this.difficulty].horizon, safeUntil), maxNodes: levels[this.difficulty].escapeNodes, stepSeconds: 0.1, initialDelaySeconds: this.centeringDelay(snapshot, player),
       goalTest: (x, y, time) => time > 0 && time + 0.3 < safeUntil && !hazards.isDangerousDuring(x, y, time, safeUntil),
     });
     return result.path;
@@ -65,11 +92,12 @@ export class BotController {
       return { input: idle(), placeBomb: false, state: "WAIT", reason: "Waiting for a safe replan" };
     }
     if (replan && canReplan) {
-      this.signature = signature; this.stuck = 0; this.nextReplan = snapshot.tick + 18 + this.phase % 5;
-      const hazards = new HazardMap(snapshot), imminent = hazards.isDangerousDuring(here.x, here.y, 0, 3.8);
+      const config = levels[this.difficulty];
+      this.signature = signature; this.stuck = 0; this.nextReplan = snapshot.tick + config.interval + this.phase % 5;
+      const hazards = new HazardMap(snapshot), imminent = hazards.isDangerousDuring(here.x, here.y, 0, config.threat);
       this.path = []; this.state = "WAIT"; this.reason = "No safe goal";
       if (imminent) {
-        this.path = this.escape(snapshot, p, hazards, 4);
+        this.path = this.escape(snapshot, p, hazards, config.escapeUntil);
         this.state = "ESCAPE"; this.reason = this.path.length ? "Bomb danger; moving to safety" : "No safe route found";
       } else {
         const hypothetical = structuredClone(snapshot);
@@ -78,7 +106,13 @@ export class BotController {
         const predicted = new HazardMap(hypothetical), blastTime = predicted.detonationTimes.get(proposedId)!;
         const others = snapshot.players.filter(other => other.id !== p.id && other.status !== "eliminated");
         const enemyInBlast = others.some(other => other.teamId !== p.teamId && predicted.isDangerous(tile(other, size).x, tile(other, size).y, blastTime));
-        const allyInBlast = others.some(other => other.teamId === p.teamId && predicted.isDangerous(tile(other, size).x, tile(other, size).y, blastTime));
+        const allyInBlast = others.some(other => {
+          if (other.teamId !== p.teamId) return false;
+          const ally = tile(other, size);
+          // Hard also protects floor tiles the ally could step onto before detonation.
+          const offsets = this.difficulty === "hard" ? [[0,0],[1,0],[-1,0],[0,1],[0,-1]] : [[0,0]];
+          return offsets.some(([dx, dy]) => snapshot.map.tiles[ally.y + dy]?.[ally.x + dx]?.type === "floor" && predicted.isDangerous(ally.x + dx, ally.y + dy, blastTime));
+        });
         const nearWall = [[1,0],[-1,0],[0,1],[0,-1]].some(([dx,dy]) => snapshot.map.tiles[here.y + dy]?.[here.x + dx]?.type === "destructible");
         const canBomb = centered && !snapshot.bombs.some(b => b.x === here.x && b.y === here.y) && snapshot.bombs.filter(b => b.ownerId === p.id).length < 1 + p.capacityUpgrades;
         if (canBomb && !allyInBlast && (enemyInBlast || nearWall)) {
@@ -89,15 +123,15 @@ export class BotController {
         }
         if (!this.path.length) {
           const items = snapshot.items.filter(i => i.kind === "pickup" && i.active && (i.type === "boots" || i.type === "range" || i.type === "capacity"));
-          const targets = items.sort((a, b) => distance(here, a) - distance(here, b) || a.y - b.y || a.x - b.x).slice(0, 3);
+          const targets = items.sort((a, b) => distance(here, a) - distance(here, b) || a.y - b.y || a.x - b.x).slice(0, config.goals);
           for (const target of targets) {
-            const route = findPath(snapshot, p, target, hazards, { maxNodes: 350, horizonSeconds: 5, initialDelaySeconds: this.centeringDelay(snapshot, p) }).path;
+            const route = this.search(snapshot, p, target, hazards, { maxNodes: config.nodes, horizonSeconds: config.horizon, initialDelaySeconds: this.centeringDelay(snapshot, p) }).path;
             if (route.length > 1) { this.path = route; this.state = "COLLECT_ITEM"; this.reason = `Seeking ${target.type}`; break; }
           }
           if (!this.path.length) {
             const enemy = others.filter(o => o.teamId !== p.teamId).sort((a, b) => distance(here, tile(a, size)) - distance(here, tile(b, size)) || a.id.localeCompare(b.id))[0];
             if (enemy) {
-              const goal = tile(enemy, size), route = findPath(snapshot, p, goal, hazards, { maxNodes: 350, horizonSeconds: 5, initialDelaySeconds: this.centeringDelay(snapshot, p) }).path;
+              const goal = tile(enemy, size), route = this.search(snapshot, p, goal, hazards, { maxNodes: config.nodes, horizonSeconds: config.horizon, initialDelaySeconds: this.centeringDelay(snapshot, p) }).path;
               if (route.length > 1) { this.path = route; this.state = "APPROACH_OPPONENT"; this.reason = "Approaching opponent"; }
             }
           }

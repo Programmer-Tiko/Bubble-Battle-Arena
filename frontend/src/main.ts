@@ -16,11 +16,18 @@ const sessionField = document.querySelector<HTMLInputElement>("#session")!;
 const modeField = document.querySelector<HTMLSelectElement>("#mode")!;
 const countField = document.querySelector<HTMLSelectElement>("#players")!;
 const botsField = document.querySelector<HTMLSelectElement>("#bots")!;
+const difficultyField = document.querySelector<HTMLSelectElement>("#difficulty")!;
+const debugToggle = document.querySelector<HTMLInputElement>("#bot-debug")!;
+const debugBot = document.querySelector<HTMLSelectElement>("#debug-bot")!;
+const debugStatus = document.querySelector<HTMLElement>("#debug-status")!;
+interface BotDebug { playerId: string; position: { x: number; y: number } | null; state: string; reason: string; path: { x: number; y: number; time: number }[]; destination: { x: number; y: number } | null; danger: { x: number; y: number; start: number; end: number }[]; tick: number }
+let botDebug: BotDebug[] = [];
+let debugPending = false, debugElapsed = 0;
 const roleField = document.querySelector<HTMLSelectElement>("#role")!;
 const server = import.meta.env.VITE_GAME_SERVER ?? "http://127.0.0.1:3001";
 document.querySelector<HTMLButtonElement>("#create-session")!.onclick = async () => {
   try {
-    const response = await fetch(`${server}/dev/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: modeField.value, players: Number(countField.value), bots: Number(botsField.value) }) });
+    const response = await fetch(`${server}/dev/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: modeField.value, players: Number(countField.value), bots: Number(botsField.value), difficulty: difficultyField.value }) });
     const body = await response.json(); if (!response.ok) throw new Error(body.error);
     sessionField.value = body.sessionId; notice.textContent = "Session created. Share its ID, then join.";
   } catch (error) { notice.textContent = `Create failed: ${String(error)}`; }
@@ -57,6 +64,15 @@ class ArenaScene extends Phaser.Scene {
     this.renderSnapshot(adapter.snapshot());
   }
   update(_time: number, delta: number): void {
+    debugElapsed += delta;
+    if (import.meta.env.DEV && network && debugToggle.checked && !debugPending && debugElapsed >= 300) {
+      debugElapsed = 0; debugPending = true;
+      fetch(`${server}/dev/sessions/${encodeURIComponent(sessionField.value.trim())}/bot-debug`).then(r => {
+        if (!r.ok) throw new Error("Start server with BOT_DEBUG=1");
+        return r.json() as Promise<BotDebug[]>;
+      }).then(data => { botDebug = data; debugStatus.textContent = ""; }).catch(() => { botDebug = []; debugStatus.textContent = "Debug unavailable; start server with BOT_DEBUG=1"; }).finally(() => { debugPending = false; });
+    }
+    if (!debugToggle.checked || !network) { botDebug = []; debugStatus.textContent = ""; }
     const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement;
     const input: MovementInput = {
       up: !typing && (this.keys.W.isDown || this.keys.UP.isDown),
@@ -82,6 +98,23 @@ class ArenaScene extends Phaser.Scene {
     for (const row of map.tiles) for (const tile of row) {
       this.graphics.fillStyle(colors[tile.type]);
       this.graphics.fillRect(tile.x * map.tileSize, tile.y * map.tileSize, map.tileSize - 1, map.tileSize - 1);
+    }
+    const debug = botDebug[Number(debugBot.value)];
+    if (debugToggle.checked && debug) {
+      debugStatus.textContent = `${debug.state}: ${debug.reason}${debug.destination ? ` → (${debug.destination.x}, ${debug.destination.y})` : ""}`;
+      for (const danger of debug.danger) {
+        if (danger.end <= 0 || danger.start > 5) continue;
+        this.graphics.fillStyle(0xff3b32, 0.27);
+        this.graphics.fillRect(danger.x * map.tileSize + 2, danger.y * map.tileSize + 2, map.tileSize - 4, map.tileSize - 4);
+        this.label(danger.x * map.tileSize + 3, danger.y * map.tileSize + 3, `${Math.max(0, danger.start).toFixed(1)}s`);
+      }
+      this.graphics.lineStyle(3, 0xffee4f, 0.9);
+      if (debug.position) {
+        this.graphics.strokeCircle(debug.position.x, debug.position.y, 14);
+        let prev = debug.position;
+        for (const point of debug.path) { const next = { x: (point.x + 0.5) * map.tileSize, y: (point.y + 0.5) * map.tileSize }; this.graphics.lineBetween(prev.x, prev.y, next.x, next.y); prev = next; }
+        if (debug.destination) this.graphics.strokeRect(debug.destination.x * map.tileSize + 5, debug.destination.y * map.tileSize + 5, map.tileSize - 10, map.tileSize - 10);
+      }
     }
     for (const explosion of snapshot.explosions) {
       this.graphics.fillStyle(0x88e9ff, 0.8);

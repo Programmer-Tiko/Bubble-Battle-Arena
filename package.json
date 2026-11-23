@@ -12,7 +12,9 @@
     "typecheck": "tsc -b packages/shared packages/engine packages/bot services/game --pretty false && npm run typecheck --workspace @bubble/frontend",
     "dev": "tsc -b packages/shared packages/engine && npm run dev --workspace @bubble/frontend",
     "server": "tsc -b packages/shared packages/engine packages/bot services/game && node services/game/dist/index.js",
-    "test:integration": "vitest run services/game/tests"
+    "test:integration": "vitest run services/game/tests",
+    "benchmark:bot": "tsc -b packages/shared packages/engine packages/bot services/game && node scripts/bot-evaluation.mjs && node scripts/bot-performance.mjs",
+    "demo:bot": "tsc -b packages/shared packages/engine packages/bot && node scripts/bot-demo.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
