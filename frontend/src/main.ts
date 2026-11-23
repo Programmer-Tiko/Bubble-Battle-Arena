@@ -1,18 +1,22 @@
 import Phaser from "phaser";
-import type { GameSnapshot, MovementInput, TileType } from "@bubble/shared";
+import type { GameSnapshot, MovementInput } from "@bubble/shared";
 import { LocalGameAdapter, type GameAdapter } from "./adapter";
 import { NetworkGameAdapter } from "./network";
 import { SessionDebug } from "./session-debug";
+import { ArenaRenderer } from "./arena-renderer";
+import { characterStats } from "./visual-model";
 import "./style.css";
-
-const teamColors = [0x2c7de1, 0xf2a64a, 0xde5e78, 0x7b65d4, 0x3a9c73, 0xe6c744, 0x8b684e, 0x77899b];
-const colors: Record<TileType, number> = { floor: 0xcee9e3, indestructible: 0x34546a, destructible: 0xd59668 };
 
 let adapter: GameAdapter = new LocalGameAdapter();
 let network: NetworkGameAdapter | undefined;
 if (!import.meta.env.DEV) document.querySelector<HTMLElement>("#dev-controls")!.hidden = true;
 const status = document.querySelector<HTMLElement>("#status")!;
 const notice = document.querySelector<HTMLElement>("#notice")!;
+const timer = document.querySelector<HTMLElement>("#timer")!;
+const badge = document.querySelector<HTMLElement>("#player-badge")!;
+const statsPanel = document.querySelector<HTMLElement>("#character-stats")!;
+const inventory = document.querySelector<HTMLElement>("#inventory")!;
+const resultPanel = document.querySelector<HTMLElement>("#match-result")!;
 const sessionField = document.querySelector<HTMLInputElement>("#session")!;
 const modeField = document.querySelector<HTMLSelectElement>("#mode")!;
 const countField = document.querySelector<HTMLSelectElement>("#players")!;
@@ -53,11 +57,13 @@ document.querySelector<HTMLButtonElement>("#local-mode")!.onclick = () => { join
 class ArenaScene extends Phaser.Scene {
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private graphics!: Phaser.GameObjects.Graphics;
-  private hud!: Phaser.GameObjects.Text;
+  private arena!: ArenaRenderer;
+  private inventorySignature = "";
+  private iconUrls: Record<string, string> = {};
   private labels: Phaser.GameObjects.Text[] = [];
   private labelCount = 0;
   private label(x: number, y: number, text: string): void {
-    const label = this.labels[this.labelCount] ?? this.add.text(0, 0, "", { fontSize: "11px", color: "#ffffff", backgroundColor: "#132633" }).setDepth(2);
+    const label = this.labels[this.labelCount] ?? this.add.text(0, 0, "", { fontSize: "11px", color: "#ffffff", backgroundColor: "#132633" }).setDepth(30);
     this.labels[this.labelCount++] = label; label.setPosition(x, y).setText(text).setVisible(true);
   }
 
@@ -66,8 +72,12 @@ class ArenaScene extends Phaser.Scene {
     if (!this.input.keyboard) throw new Error("Keyboard input is unavailable");
     this.keys = this.input.keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,ONE,TWO,THREE,FOUR,FIVE") as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard.addCapture(["UP", "DOWN", "LEFT", "RIGHT"]);
-    this.graphics = this.add.graphics();
-    this.hud = this.add.text(5, 5, "", { fontSize: "13px", color: "#ffffff", backgroundColor: "#132633" }).setScrollFactor(0).setDepth(1);
+    this.graphics = this.add.graphics().setDepth(3);
+    this.arena = new ArenaRenderer(this);
+    for (const type of ["banana", "slowdown"]) {
+      const source = this.textures.get(`item-${type}`).getSourceImage();
+      if (source instanceof HTMLCanvasElement) this.iconUrls[type] = source.toDataURL();
+    }
     const { map } = adapter.snapshot();
     this.cameras.main.setBounds(0, 0, map.width * map.tileSize, map.height * map.tileSize);
     this.renderSnapshot(adapter.snapshot());
@@ -98,18 +108,43 @@ class ArenaScene extends Phaser.Scene {
     const snapshot = adapter.snapshot();
     const player = snapshot.players.find(p => p.id === adapter.playerId);
     const remaining = Math.max(0, 600 - snapshot.elapsedSeconds);
-    const result = snapshot.result ? (snapshot.result.kind === "draw" ? "Draw" : `Winner: ${snapshot.result.teamId}`) : "";
-    status.textContent = `${network ? `${network.status} | Session ${network.sessionId}` : "Local mode"} | ${network && !network.playerId ? "Spectator" : player?.status === "eliminated" ? "Spectator (eliminated)" : `Player ${adapter.playerId} / ${player?.teamId ?? ""}`} | ${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")} ${player ? `| Speed: ${player.slowSeconds > 0 ? 50 : 100 + player.boots * 10}% (boots ${player.boots}) ${player.slowSeconds > 0 ? `| Slowed: ${player.slowSeconds.toFixed(1)}s` : ""}` : ""} ${result}`;
+    const winningTeam = snapshot.result?.kind === "winner" ? snapshot.result.teamId : undefined;
+    const winners = winningTeam ? snapshot.players.filter(p => p.teamId === winningTeam) : [];
+    const result = snapshot.result ? (snapshot.result.kind === "draw" ? "It's a draw!" : winners.length === 1 ? `Player ${snapshot.players.indexOf(winners[0]) + 1} wins!` : `${snapshot.result.teamId} wins!`) : "";
+    timer.textContent = `${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")}`;
+    const number = snapshot.players.findIndex(p => p.id === adapter.playerId) + 1;
+    badge.textContent = network && !network.playerId ? "SPECTATOR" : player?.status === "eliminated" ? "ELIMINATED · SPECTATING" : player ? `PLAYER ${number} · ${player.status.toUpperCase()}` : "SPECTATOR";
+    status.textContent = network ? `${network.status} | Session ${network.sessionId}` : "Local mode";
+    resultPanel.hidden = !snapshot.result; resultPanel.textContent = result;
+    this.updateLoadout(player);
     this.renderSnapshot(snapshot);
+  }
+  private updateLoadout(player: GameSnapshot["players"][number] | undefined): void {
+    if (!player) {
+      if (this.inventorySignature !== "spectator") { inventory.replaceChildren(); statsPanel.textContent = "Spectator view"; this.inventorySignature = "spectator"; }
+      return;
+    }
+    const stats = characterStats(player);
+    const signature = JSON.stringify(stats);
+    if (signature === this.inventorySignature) return;
+    this.inventorySignature = signature;
+    statsPanel.replaceChildren();
+    for (const [label, value] of [["Speed", `${stats.speedPercent}%`], ["Balloons", `×${stats.capacity}`], ["Blast", `×${stats.range}`]]) {
+      const item = document.createElement("span"), amount = document.createElement("b"); item.textContent = label; amount.textContent = value; item.append(amount); statsPanel.append(item);
+    }
+    inventory.replaceChildren();
+    stats.inventory.forEach((slot, index) => {
+      const box = document.createElement("div"), key = document.createElement("span");
+      box.className = `slot${slot ? "" : " empty"}`; box.setAttribute("aria-label", `Slot ${index + 1}: ${slot ? `${slot.type}, ${slot.charges} charges` : "empty"}`);
+      key.className = "slot-key"; key.textContent = String(index + 1); box.append(key);
+      if (slot) { const image = document.createElement("img"), count = document.createElement("span"); image.src = this.iconUrls[slot.type]; image.alt = ""; count.className = "slot-charge"; count.textContent = `×${slot.charges}`; box.append(image, count); }
+      inventory.append(box);
+    });
   }
   private renderSnapshot(snapshot: GameSnapshot): void {
     const { map } = snapshot;
-    this.graphics.clear();
-    this.labels.forEach(label => label.setVisible(false)); this.labelCount = 0;
-    for (const row of map.tiles) for (const tile of row) {
-      this.graphics.fillStyle(colors[tile.type]);
-      this.graphics.fillRect(tile.x * map.tileSize, tile.y * map.tileSize, map.tileSize - 1, map.tileSize - 1);
-    }
+    this.arena.render(snapshot, this.time.now);
+    this.graphics.clear(); this.labels.forEach(label => label.setVisible(false)); this.labelCount = 0;
     const debug = botDebug.data[Number(debugBot.value)];
     if (debugToggle.checked && debug) {
       debugStatus.textContent = `${debug.state}: ${debug.reason}${debug.destination ? ` → (${debug.destination.x}, ${debug.destination.y})` : ""}`;
@@ -119,7 +154,7 @@ class ArenaScene extends Phaser.Scene {
         this.graphics.fillRect(danger.x * map.tileSize + 2, danger.y * map.tileSize + 2, map.tileSize - 4, map.tileSize - 4);
         this.label(danger.x * map.tileSize + 3, danger.y * map.tileSize + 3, `${Math.max(0, danger.start).toFixed(1)}s`);
       }
-      this.graphics.lineStyle(3, 0xffee4f, 0.9);
+      this.graphics.lineStyle(3, 0xffc92e, 0.95);
       if (debug.position) {
         this.graphics.strokeCircle(debug.position.x, debug.position.y, 14);
         let prev = debug.position;
@@ -127,50 +162,10 @@ class ArenaScene extends Phaser.Scene {
         if (debug.destination) this.graphics.strokeRect(debug.destination.x * map.tileSize + 5, debug.destination.y * map.tileSize + 5, map.tileSize - 10, map.tileSize - 10);
       }
     }
-    for (const explosion of snapshot.explosions) {
-      this.graphics.fillStyle(0x88e9ff, 0.8);
-      this.graphics.fillRect(explosion.x * map.tileSize + 3, explosion.y * map.tileSize + 3, map.tileSize - 6, map.tileSize - 6);
-    }
-    const itemColors = { boots: 0x52bd65, capacity: 0x7266df, range: 0xf39843, banana: 0xffdf41, slowdown: 0xe25f7b };
-    for (const item of snapshot.items) {
-      if (item.supplyDroppedAt !== undefined) {
-        const age = snapshot.elapsedSeconds - item.supplyDroppedAt;
-        if (age >= 0 && age < 3) {
-          const x = (item.x + 0.5) * map.tileSize, y = (item.y + 0.5) * map.tileSize;
-          this.graphics.lineStyle(2, 0xffffff, 1 - age / 3);
-          this.graphics.strokeCircle(x, y, 12 + age * 3);
-          if (age < 1) { this.graphics.fillStyle(0xffffff, 0.9); this.graphics.fillCircle(x, y - (1 - age) * 25, 3); }
-        }
-      }
-      this.graphics.fillStyle(itemColors[item.type], item.kind === "trap" && !item.active ? 0.5 : 1);
-      this.graphics.fillRect(item.x * map.tileSize + 9, item.y * map.tileSize + 9, 14, 14);
-      if (item.kind !== "pickup") { this.graphics.lineStyle(2, 0x222222); this.graphics.strokeRect(item.x * map.tileSize + 9, item.y * map.tileSize + 9, 14, 14); }
-    }
-    if (snapshot.balloon) {
-      const progress = Math.max(0, Math.min(1, (snapshot.elapsedSeconds - snapshot.balloon.startedAt) / snapshot.balloon.durationSeconds));
-      const x = -20 + progress * (map.width * map.tileSize + 40), y = map.tileSize * 1.5;
-      this.graphics.fillStyle(0xe75e58); this.graphics.fillEllipse(x, y, 30, 38);
-      this.graphics.fillStyle(0xffd06c); this.graphics.fillEllipse(x, y, 12, 37);
-      this.graphics.lineStyle(2, 0x66452b); this.graphics.lineBetween(x - 9, y + 15, x - 5, y + 25); this.graphics.lineBetween(x + 9, y + 15, x + 5, y + 25);
-      this.graphics.fillStyle(0x8b5c38); this.graphics.fillRect(x - 7, y + 23, 14, 8);
-    }
-    const local = snapshot.players.find(p => p.id === adapter.playerId);
-    this.hud.setText(local ? local.inventory.map((slot, i) => `${i + 1}: ${slot ? `${slot.type} x${slot.charges}` : "-"}`).join("  ") : "");
-    for (const bomb of snapshot.bombs) {
-      this.graphics.fillStyle(0x27408b);
-      this.graphics.fillCircle((bomb.x + 0.5) * map.tileSize, (bomb.y + 0.5) * map.tileSize, 11);
-      this.label((bomb.x + 0.5) * map.tileSize - 4, (bomb.y + 0.5) * map.tileSize - 7, String(Math.max(1, Math.ceil(bomb.remainingSeconds))));
-    }
-    const teams = [...new Set(snapshot.players.map(player => player.teamId))].sort();
-    for (const player of snapshot.players) {
-      if (player.status === "eliminated") continue;
-      this.graphics.fillStyle(player.status === "trapped" ? 0x84e8ff : teamColors[teams.indexOf(player.teamId) % teamColors.length]);
-      this.graphics.fillCircle(player.x, player.y, 10);
-      this.graphics.lineStyle(2, player.status === "trapped" ? teamColors[teams.indexOf(player.teamId) % teamColors.length] : 0xffffff);
-      this.graphics.strokeCircle(player.x, player.y, 10);
-      const number = snapshot.players.findIndex(p => p.id === player.id) + 1;
-      this.label(player.x - 7, player.y - 23, player.status === "trapped" ? `${number}: ${Math.ceil(player.trappedSeconds)}s` : String(number));
-    }
+    snapshot.players.forEach((player, index) => {
+      if (player.status === "eliminated") return;
+      this.label(player.x - 7, player.y - map.tileSize * .9, player.status === "trapped" ? `${index + 1}: ${Math.ceil(player.trappedSeconds)}s` : String(index + 1));
+    });
   }
 }
 

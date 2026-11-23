@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { io, type Socket } from "socket.io-client";
 import type { ClientEvents, ServerEvents, JoinInfo, GameState, Reply } from "@bubble/shared";
 import { createGameServer, type Session } from "../src/server.js";
+import { supplyMarkers } from "../../../frontend/src/visual-model.js";
 
 let clock = 1000;
 let server: ReturnType<typeof createGameServer>;
@@ -28,6 +29,21 @@ beforeEach(async () => {
 afterEach(async () => { for (const socket of sockets) socket.disconnect(); await server.close(); });
 
 describe("Socket.IO authoritative sessions", () => {
+  it("delivers the same authoritative supply locations to players, spectators, and late joins", async () => {
+    const session = server.create("ffa", 4), player = await client(), spectator = await client();
+    await join(player, session); await join(spectator, session, "spectator");
+    const seenPlayer: GameState[] = [], seenSpectator: GameState[] = [];
+    player.on("snapshot", s => seenPlayer.push(s)); spectator.on("snapshot", s => seenSpectator.push(s));
+    const state = (session.game as unknown as { state: GameState }).state;
+    state.tick = 5399; state.elapsedSeconds = 5399 / 30;
+    steps(session, 1); await vi.waitFor(() => expect(seenPlayer.at(-1)?.balloon?.startedAt).toBe(180));
+    await vi.waitFor(() => expect(seenSpectator.at(-1)?.balloon?.startedAt).toBe(180));
+    const markers = supplyMarkers(seenPlayer.at(-1)!);
+    expect(markers.length).toBeGreaterThanOrEqual(4); expect(supplyMarkers(seenSpectator.at(-1)!)).toEqual(markers);
+    const late = await join(await client(), session, "spectator");
+    expect(late.ok && supplyMarkers(late.value.snapshot)).toEqual(markers);
+    steps(session, 90); expect(supplyMarkers(session.game.getSnapshot())).toEqual([]);
+  });
   it("joins four FFA players and four two-team players with consistent initial state", async () => {
     for (const mode of ["ffa", "team"] as const) {
       const session = server.create(mode, 4), infos: JoinInfo[] = [];
