@@ -30,6 +30,24 @@ beforeEach(async () => {
 afterEach(async () => { sockets.forEach(s => s.disconnect()); await server.close(); });
 
 describe("server-controlled bots", () => {
+  it.each([
+    ["ffa", 4, 3, "normal"], ["ffa", 4, 3, "hard"], ["ffa", 4, 4, "normal"],
+    ["ffa", 8, 8, "normal"], ["team", 4, 2, "normal"],
+  ] as const)("continues authoritative gameplay for %s with %i slots, %i bots, %s", (mode, count, botCount, difficulty) => {
+    const session = server.create(mode, count, botCount, difficulty);
+    const initial = session.game.getSnapshot(), moved = new Map<string, number>();
+    let previous = initial;
+    for (let tick = 0; tick < 360 && !session.completed; tick++) {
+      server.tick(session); const current = session.game.getSnapshot();
+      for (const slot of session.slots.filter(s => s.bot)) {
+        const before = previous.players.find(p => p.id === slot.id)!, after = current.players.find(p => p.id === slot.id)!;
+        moved.set(slot.id, (moved.get(slot.id) ?? 0) + Math.hypot(after.x - before.x, after.y - before.y));
+        if (before.status !== "alive") expect(after).toMatchObject({ x: before.x, y: before.y });
+      }
+      previous = current;
+    }
+    expect([...moved.values()].filter(distance => distance > initial.map.tileSize).length).toBeGreaterThanOrEqual(Math.min(botCount, 2));
+  }, 15000);
   it("reserves slots and broadcasts autonomous movement to a human and spectator", async () => {
     const session = server.create("ffa", 4, 3), human = await connect(session, "player"), spectator = await connect(session, "spectator");
     expect(human.reply.ok).toBe(true); expect(spectator.reply.ok).toBe(true);

@@ -25,7 +25,7 @@ export class NetworkGameAdapter implements GameAdapter {
   private pendingMs = 100;
   private input: MovementInput = { up: false, down: false, left: false, right: false };
   private current: GameSnapshot;
-  private constructor(private socket: Socket<ServerEvents, ClientEvents>, info: JoinInfo) {
+  private constructor(private socket: Socket<ServerEvents, ClientEvents>, info: JoinInfo, readonly sessionId: string) {
     this.playerId = info.playerId ?? ""; this.teamId = info.teamId; this.current = info.snapshot;
     socket.on("snapshot", snapshot => { if (isSnapshot(snapshot)) this.current = snapshot; else { socket.disconnect(); this.status = "invalid server snapshot"; } });
     socket.on("finished", result => { if (!result || (result.kind !== "draw" && (result.kind !== "winner" || typeof result.teamId !== "string"))) { socket.disconnect(); this.status = "invalid server result"; } });
@@ -39,10 +39,11 @@ export class NetworkGameAdapter implements GameAdapter {
       socket.once("connect", () => socket.timeout(5000).emit("join", { sessionId, role }, (error: Error | null, result: Reply<JoinInfo>) => {
         if (error || !result?.ok) { socket.disconnect(); reject(error ?? new Error(result && !result.ok ? result.error : "Join failed")); return; }
         if (!record(result.value) || !(result.value.playerId === null || typeof result.value.playerId === "string") || !(result.value.teamId === null || typeof result.value.teamId === "string") || !isSnapshot(result.value.snapshot)) { socket.disconnect(); reject(new Error("Invalid join response")); return; }
-        resolve(new NetworkGameAdapter(socket, result.value as unknown as JoinInfo));
+        resolve(new NetworkGameAdapter(socket, result.value as unknown as JoinInfo, sessionId));
       }));
     });
   }
+  get connected(): boolean { return this.socket.connected; }
   setInput(input: MovementInput): void { this.input = { ...input }; }
   placeBomb(): void { if (this.playerId && this.socket.connected) this.socket.emit("bomb", { seq: this.actionSeq++ }, () => {}); }
   useItem(slot: number): void { if (this.playerId && this.socket.connected) this.socket.emit("item", { seq: this.actionSeq++, slot }, () => {}); }

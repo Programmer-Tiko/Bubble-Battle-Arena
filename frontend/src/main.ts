@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import type { GameSnapshot, MovementInput, TileType } from "@bubble/shared";
 import { LocalGameAdapter, type GameAdapter } from "./adapter";
 import { NetworkGameAdapter } from "./network";
+import { SessionDebug } from "./session-debug";
 import "./style.css";
 
 const teamColors = [0x2c7de1, 0xf2a64a, 0xde5e78, 0x7b65d4, 0x3a9c73, 0xe6c744, 0x8b684e, 0x77899b];
@@ -21,25 +22,33 @@ const debugToggle = document.querySelector<HTMLInputElement>("#bot-debug")!;
 const debugBot = document.querySelector<HTMLSelectElement>("#debug-bot")!;
 const debugStatus = document.querySelector<HTMLElement>("#debug-status")!;
 interface BotDebug { playerId: string; position: { x: number; y: number } | null; state: string; reason: string; path: { x: number; y: number; time: number }[]; destination: { x: number; y: number } | null; danger: { x: number; y: number; start: number; end: number }[]; tick: number }
-let botDebug: BotDebug[] = [];
+const botDebug = new SessionDebug<BotDebug>();
 let debugPending = false, debugElapsed = 0;
+let debugRequest: AbortController | undefined;
+let joinGeneration = 0;
+function bindDebug(sessionId: string | null): void {
+  debugRequest?.abort(); debugRequest = undefined; debugPending = false;
+  botDebug.bind(sessionId); debugStatus.textContent = "";
+}
 const roleField = document.querySelector<HTMLSelectElement>("#role")!;
 const server = import.meta.env.VITE_GAME_SERVER ?? "http://127.0.0.1:3001";
 document.querySelector<HTMLButtonElement>("#create-session")!.onclick = async () => {
   try {
     const response = await fetch(`${server}/dev/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: modeField.value, players: Number(countField.value), bots: Number(botsField.value), difficulty: difficultyField.value }) });
     const body = await response.json(); if (!response.ok) throw new Error(body.error);
-    sessionField.value = body.sessionId; notice.textContent = "Session created. Share its ID, then join.";
+    sessionField.value = body.sessionId; notice.textContent = network?.connected ? `Session created: ${body.sessionId}. Still viewing ${network.sessionId}; join to switch.` : "Session created. Share its ID, then join.";
   } catch (error) { notice.textContent = `Create failed: ${String(error)}`; }
 };
 document.querySelector<HTMLButtonElement>("#join-session")!.onclick = async () => {
+  const generation = ++joinGeneration, requestedSession = sessionField.value.trim();
   try {
     notice.textContent = "Connecting...";
-    const next = await NetworkGameAdapter.connect(server, sessionField.value.trim(), roleField.value === "spectator" ? "spectator" : "player");
-    network?.close(); network = next; adapter = next; (document.activeElement as HTMLElement | null)?.blur(); notice.textContent = "Joined session.";
-  } catch (error) { notice.textContent = `Join failed: ${String(error)}`; }
+    const next = await NetworkGameAdapter.connect(server, requestedSession, roleField.value === "spectator" ? "spectator" : "player");
+    if (generation !== joinGeneration) { next.close(); return; }
+    network?.close(); network = next; adapter = next; bindDebug(next.sessionId); (document.activeElement as HTMLElement | null)?.blur(); notice.textContent = `Joined session ${next.sessionId}.`;
+  } catch (error) { if (generation === joinGeneration) notice.textContent = `Join failed: ${String(error)}`; }
 };
-document.querySelector<HTMLButtonElement>("#local-mode")!.onclick = () => { network?.close(); network = undefined; adapter = new LocalGameAdapter(); notice.textContent = "Local mode selected."; };
+document.querySelector<HTMLButtonElement>("#local-mode")!.onclick = () => { joinGeneration++; network?.close(); network = undefined; bindDebug(null); adapter = new LocalGameAdapter(); notice.textContent = "Local mode selected."; };
 
 class ArenaScene extends Phaser.Scene {
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
@@ -65,14 +74,16 @@ class ArenaScene extends Phaser.Scene {
   }
   update(_time: number, delta: number): void {
     debugElapsed += delta;
-    if (import.meta.env.DEV && network && debugToggle.checked && !debugPending && debugElapsed >= 300) {
+    if (network && !network.connected && botDebug.ticket()) bindDebug(null);
+    if (import.meta.env.DEV && network?.connected && debugToggle.checked && !debugPending && debugElapsed >= 300) {
       debugElapsed = 0; debugPending = true;
-      fetch(`${server}/dev/sessions/${encodeURIComponent(sessionField.value.trim())}/bot-debug`).then(r => {
+      const active = network, ticket = botDebug.ticket()!, request = debugRequest = new AbortController();
+      fetch(`${server}/dev/sessions/${encodeURIComponent(ticket.sessionId)}/bot-debug`, { signal: request.signal }).then(r => {
         if (!r.ok) throw new Error("Start server with BOT_DEBUG=1");
         return r.json() as Promise<BotDebug[]>;
-      }).then(data => { botDebug = data; debugStatus.textContent = ""; }).catch(() => { botDebug = []; debugStatus.textContent = "Debug unavailable; start server with BOT_DEBUG=1"; }).finally(() => { debugPending = false; });
+      }).then(data => { if (active === network && active.connected && debugToggle.checked && botDebug.accept(ticket, data)) debugStatus.textContent = ""; }).catch(() => { if (!request.signal.aborted && active === network && active.connected && debugToggle.checked && botDebug.accept(ticket, [])) debugStatus.textContent = "Debug unavailable; start server with BOT_DEBUG=1"; }).finally(() => { if (debugRequest === request) { debugRequest = undefined; debugPending = false; } });
     }
-    if (!debugToggle.checked || !network) { botDebug = []; debugStatus.textContent = ""; }
+    if (!debugToggle.checked || !network?.connected) { debugRequest?.abort(); debugRequest = undefined; debugPending = false; botDebug.clear(); debugStatus.textContent = ""; }
     const typing = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLSelectElement;
     const input: MovementInput = {
       up: !typing && (this.keys.W.isDown || this.keys.UP.isDown),
@@ -88,7 +99,7 @@ class ArenaScene extends Phaser.Scene {
     const player = snapshot.players.find(p => p.id === adapter.playerId);
     const remaining = Math.max(0, 600 - snapshot.elapsedSeconds);
     const result = snapshot.result ? (snapshot.result.kind === "draw" ? "Draw" : `Winner: ${snapshot.result.teamId}`) : "";
-    status.textContent = `${network ? network.status : "Local mode"} | ${network && !network.playerId ? "Spectator" : player?.status === "eliminated" ? "Spectator (eliminated)" : `Player ${adapter.playerId} / ${player?.teamId ?? ""}`} | ${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")} ${player ? `| Speed: ${player.slowSeconds > 0 ? 50 : 100 + player.boots * 10}% (boots ${player.boots}) ${player.slowSeconds > 0 ? `| Slowed: ${player.slowSeconds.toFixed(1)}s` : ""}` : ""} ${result}`;
+    status.textContent = `${network ? `${network.status} | Session ${network.sessionId}` : "Local mode"} | ${network && !network.playerId ? "Spectator" : player?.status === "eliminated" ? "Spectator (eliminated)" : `Player ${adapter.playerId} / ${player?.teamId ?? ""}`} | ${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")} ${player ? `| Speed: ${player.slowSeconds > 0 ? 50 : 100 + player.boots * 10}% (boots ${player.boots}) ${player.slowSeconds > 0 ? `| Slowed: ${player.slowSeconds.toFixed(1)}s` : ""}` : ""} ${result}`;
     this.renderSnapshot(snapshot);
   }
   private renderSnapshot(snapshot: GameSnapshot): void {
@@ -99,7 +110,7 @@ class ArenaScene extends Phaser.Scene {
       this.graphics.fillStyle(colors[tile.type]);
       this.graphics.fillRect(tile.x * map.tileSize, tile.y * map.tileSize, map.tileSize - 1, map.tileSize - 1);
     }
-    const debug = botDebug[Number(debugBot.value)];
+    const debug = botDebug.data[Number(debugBot.value)];
     if (debugToggle.checked && debug) {
       debugStatus.textContent = `${debug.state}: ${debug.reason}${debug.destination ? ` → (${debug.destination.x}, ${debug.destination.y})` : ""}`;
       for (const danger of debug.danger) {
