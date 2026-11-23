@@ -29,38 +29,66 @@ const palettes = [
   { hair: "#b881a9", light: "#f5c7df", coat: "#7193be", trim: "#fff4e3", skin: "#f5cab3", accent: "#ffe6a1" },
   { hair: "#dce5e6", light: "#ffffff", coat: "#bb7889", trim: "#fff4db", skin: "#bc846d", accent: "#a8dfd1" },
 ];
+// Hand-drawn vector silhouettes: each player has a different hair shape and outfit.
 function character(c: CanvasRenderingContext2D, i: number, back: boolean, frame: number): void {
-  const p = palettes[i], outline = "#303b55", step = frame === 1 ? -2 : frame === 2 ? 2 : 0;
-  // Hair silhouette and a distinct accessory give each roster member a readable identity.
-  if (i === 1 || i === 4) ellipse(c, 12, 29, 6, 13, p.hair, outline, 1.2);
-  if (i === 1 || i === 6) ellipse(c, 52, 29, 6, 13, p.hair, outline, 1.2);
-  if (i === 3) shape(c, [10,25, 3,33, 9,43, 17,34], p.hair, outline, 1.2);
-  ellipse(c, 32, 66, 18, 4, "rgba(39,49,67,.20)");
-  rounded(c, 21, 52, 9, 13 + step, 4, "#39455d", outline, 1.2); rounded(c, 34, 52, 9, 13 - step, 4, "#39455d", outline, 1.2);
-  rounded(c, 19, 61 + step, 12, 6, 3, "#f8ecdd", outline, 1.2); rounded(c, 33, 61 - step, 12, 6, 3, "#f8ecdd", outline, 1.2);
-  rounded(c, 17, 41, 30, 19, 9, p.coat, outline, 1.4);
-  shape(c, [23,43, 32,49, 41,43, 38,52, 26,52], p.trim);
-  rounded(c, 13, 44 + step / 2, 10, 13, 5, p.coat, outline, 1.2); rounded(c, 41, 44 - step / 2, 10, 13, 5, p.coat, outline, 1.2);
-  ellipse(c, 17, 54 + step / 2, 4, 3, p.skin, outline, .8); ellipse(c, 47, 54 - step / 2, 4, 3, p.skin, outline, .8);
-  ellipse(c, 32, 27, 23, 22, p.hair, outline, 1.5);
-  if (!back) {
-    ellipse(c, 32, 31, 18, 16, p.skin, outline, 1.1);
-    ellipse(c, 25, 33, 2.8, 4, "#30344d"); ellipse(c, 39, 33, 2.8, 4, "#30344d");
-    ellipse(c, 24.3, 31.7, .9, 1.2, "#fff"); ellipse(c, 38.3, 31.7, .9, 1.2, "#fff");
-    ellipse(c, 19, 38, 3, 1.5, "rgba(239,119,132,.4)"); ellipse(c, 45, 38, 3, 1.5, "rgba(239,119,132,.4)");
-    c.beginPath(); c.moveTo(30, 40); c.quadraticCurveTo(32, 42, 34, 40); c.strokeStyle = "#9d5c63"; c.lineWidth = 1; c.stroke();
-    shape(c, [11,26, 13,15, 22,8, 38,7, 49,13, 53,26, 46,23, 43,28, 38,22, 32,27, 28,22, 21,27, 18,22], p.hair, outline, 1.2);
-    shape(c, [16,17, 22,11, 30,10, 25,13, 19,18], p.light);
-  } else {
-    ellipse(c, 32, 27, 21, 20, p.hair, outline, 1.2);
-    shape(c, [15,20, 20,12, 30,9, 25,13, 19,21], p.light);
-    c.strokeStyle = p.light; c.lineWidth = 1; c.beginPath(); c.moveTo(38,13); c.quadraticCurveTo(43,21,42,34); c.stroke();
+  const p = palettes[i], ink = "#3c3551", step = frame === 1 ? -2 : frame === 2 ? 2 : 0;
+  const grad = (top: string, bottom: string, y1: number, y2: number) => {
+    const g = c.createLinearGradient(0, y1, 0, y2); g.addColorStop(0, top); g.addColorStop(1, bottom); return g;
+  };
+  const path = (draw: () => void, fill: string | CanvasGradient, stroke = ink, width = 1.5) => {
+    c.beginPath(); draw(); c.closePath(); c.fillStyle = fill; c.fill();
+    c.strokeStyle = stroke; c.lineWidth = width; c.stroke();
+  };
+  const hair = grad(p.light, p.hair, 2, 40);
+  // The back hair and side locks define eight different, readable silhouettes.
+  if (i === 1 || i === 6) {
+    path(() => { c.moveTo(14,18); c.bezierCurveTo(3,18,2,32,5,43); c.quadraticCurveTo(8,49,16,43); c.lineTo(19,26); }, hair);
+    path(() => { c.moveTo(50,18); c.bezierCurveTo(61,18,62,32,59,43); c.quadraticCurveTo(56,49,48,43); c.lineTo(45,26); }, hair);
+  } else if (i === 3) {
+    path(() => { c.moveTo(45,13); c.bezierCurveTo(62,11,64,24,59,35); c.quadraticCurveTo(63,43,52,45); c.lineTo(42,31); }, hair);
+  } else if (i === 4 || i === 7) {
+    path(() => { c.moveTo(11,19); c.quadraticCurveTo(2,34,9,46); c.quadraticCurveTo(17,42,19,31); }, hair);
+    path(() => { c.moveTo(53,19); c.quadraticCurveTo(62,34,55,46); c.quadraticCurveTo(47,42,45,31); }, hair);
+  } else if (i === 2) {
+    path(() => { c.moveTo(12,24); c.quadraticCurveTo(3,25,5,34); c.quadraticCurveTo(9,41,17,35); }, hair);
+    path(() => { c.moveTo(52,24); c.quadraticCurveTo(61,25,59,34); c.quadraticCurveTo(55,41,47,35); }, hair);
   }
-  if (i % 4 === 0) { ellipse(c, 46, 13, 4, 4, p.accent, outline, .8); ellipse(c, 46, 13, 1.3, 1.3, "#fff7da"); }
-  if (i % 4 === 1) { shape(c, [14,13, 8,10, 9,17, 15,16], p.accent, outline, .8); shape(c, [17,13, 22,9, 21,17, 16,16], p.accent, outline, .8); }
-  if (i % 4 === 2) { rounded(c, 36, 8, 12, 3, 1, p.accent, outline, .7); }
-  if (i % 4 === 3) { shape(c, [14,15, 17,7, 24,10, 23,15], p.accent, outline, .8); }
-  ellipse(c, 32, 53, 2, 2, p.accent);
+  ellipse(c,32,67,18,3,"rgba(37,51,65,.19)");
+  // Boots, layered clothing and a central contrasting collar read at small sizes.
+  rounded(c,21,53,9,11+step,4,"#4c4960",ink,1); rounded(c,34,53,9,11-step,4,"#4c4960",ink,1);
+  rounded(c,19,60+step,12,6,3,"#f9efe4",ink,1); rounded(c,33,60-step,12,6,3,"#f9efe4",ink,1);
+  path(() => { c.moveTo(22,41); c.quadraticCurveTo(32,37,42,41); c.quadraticCurveTo(47,48,47,59); c.quadraticCurveTo(32,63,17,59); c.quadraticCurveTo(17,48,22,41); }, grad(p.trim,p.coat,39,60));
+  path(() => { c.moveTo(21,43); c.quadraticCurveTo(14,41,12,49+step/2); c.lineTo(14,55+step/2); c.lineTo(22,53); }, p.coat,ink,1.1);
+  path(() => { c.moveTo(43,43); c.quadraticCurveTo(50,41,52,49-step/2); c.lineTo(50,55-step/2); c.lineTo(42,53); }, p.coat,ink,1.1);
+  ellipse(c,16,55+step/2,3.5,3,p.skin,ink,.8); ellipse(c,48,55-step/2,3.5,3,p.skin,ink,.8);
+  if (!back) {
+    path(() => { c.moveTo(23,42); c.lineTo(32,48); c.lineTo(41,42); c.lineTo(38,51); c.lineTo(32,48); c.lineTo(26,51); }, p.trim,ink,.8);
+    if (i % 3 === 0) { path(() => { c.moveTo(32,47); c.lineTo(27,49); c.lineTo(28,53); c.lineTo(32,51); c.lineTo(36,53); c.lineTo(37,49); },p.accent,ink,.7); }
+    else if (i % 3 === 1) { rounded(c,25,54,14,3,1,p.accent,ink,.6); }
+    else { path(() => { c.moveTo(29,49); c.lineTo(35,49); c.lineTo(34,56); c.lineTo(30,56); },p.accent,ink,.7); }
+  } else { rounded(c,23,51,18,4,2,p.trim,ink,.7); }
+  // Rounded back hair and a softly shaded face, with tapered bangs rather than blocky shapes.
+  path(() => { c.moveTo(9,28); c.bezierCurveTo(8,12,18,4,32,4); c.bezierCurveTo(47,4,56,13,55,28); c.lineTo(51,38); c.quadraticCurveTo(32,47,13,38); },hair);
+  if (!back) {
+    path(() => { c.moveTo(14,25); c.bezierCurveTo(15,14,49,14,50,25); c.bezierCurveTo(51,37,45,43,32,44); c.bezierCurveTo(19,43,13,37,14,25); },grad("#fff0df",p.skin,19,43),ink,1.1);
+    // Large eyes, upper lashes and light reflections are deliberately bold at game scale.
+    ellipse(c,24,32,3.7,5.1,"#424057"); ellipse(c,40,32,3.7,5.1,"#424057");
+    ellipse(c,23.2,30.5,1.4,1.7,"#fffdf4"); ellipse(c,39.2,30.5,1.4,1.7,"#fffdf4");
+    ellipse(c,25,34.3,.8,.6,p.light); ellipse(c,41,34.3,.8,.6,p.light);
+    ellipse(c,18,38,3,1.5,"rgba(228,115,130,.42)"); ellipse(c,46,38,3,1.5,"rgba(228,115,130,.42)");
+    c.beginPath(); c.moveTo(30,39.5); c.quadraticCurveTo(32,41.5,34,39.5); c.strokeStyle="#a45f6d"; c.lineWidth=1.1; c.stroke();
+    const part = [0,-3,2,4,-2,3,-4,1][i];
+    path(() => { c.moveTo(10,26); c.bezierCurveTo(9,10,19,4,32,4); c.bezierCurveTo(46,4,55,12,54,26); c.quadraticCurveTo(51,30,48,31); c.quadraticCurveTo(46,23,42+part,19); c.quadraticCurveTo(42,27,36,29); c.quadraticCurveTo(34,24,32+part,20); c.quadraticCurveTo(28,29,21,30); c.quadraticCurveTo(20,25,19,23); c.quadraticCurveTo(16,31,12,33); },hair,ink,1.3);
+  } else {
+    path(() => { c.moveTo(10,27); c.bezierCurveTo(9,11,20,4,32,4); c.bezierCurveTo(46,4,55,12,54,27); c.quadraticCurveTo(54,40,47,42); c.quadraticCurveTo(32,46,17,42); c.quadraticCurveTo(10,39,10,27); },hair,ink,1.3);
+    c.beginPath(); c.moveTo(39,15); c.quadraticCurveTo(45,25,43,35); c.strokeStyle="rgba(255,255,255,.32)"; c.lineWidth=1.3; c.stroke();
+  }
+  c.beginPath(); c.moveTo(17,17); c.quadraticCurveTo(23,10,31,10); c.strokeStyle="rgba(255,255,255,.55)"; c.lineWidth=2; c.stroke();
+  // Individual accessories distinguish players even when their backs face the camera.
+  if (i === 0 || i === 7) { ellipse(c,47,14,4.5,4.5,p.accent,ink,.8); ellipse(c,47,14,1.5,1.5,"#fff8e5"); }
+  else if (i === 1 || i === 6) { path(() => { c.moveTo(10,14); c.quadraticCurveTo(4,8,4,16); c.lineTo(12,18); c.lineTo(19,15); c.quadraticCurveTo(19,8,13,13); },p.accent,ink,.8); ellipse(c,12,15,2,2,p.trim,ink,.6); }
+  else if (i === 2 || i === 5) { rounded(c,37,8,12,3,1.5,p.accent,ink,.8); }
+  else { path(() => { c.moveTo(11,15); c.lineTo(15,6); c.lineTo(22,9); c.lineTo(21,16); },p.accent,ink,.8); }
 }
 function icon(c: CanvasRenderingContext2D, type: string): void {
   const o = "#35445e";
@@ -75,11 +103,17 @@ function icon(c: CanvasRenderingContext2D, type: string): void {
     shape(c,[14,4,18,4,18,12,26,12,26,17,18,17,18,25,14,25,14,17,6,17,6,12,14,12],"#ffbf68",o,1.4);
     ellipse(c,16,14.5,4,4,"#fff1c5");
   } else if (type === "banana") {
-    shape(c,[15,5, 18,6, 18,11, 25,21, 21,24, 16,18, 12,25, 8,23, 12,14, 7,19, 5,16, 12,9],"#f7d766",o,1.4);
-    rounded(c,14,4,4,4,1,"#886044");
+    // Three curved yellow peel flaps and a dark stem read as a peel, not an arrow.
+    c.lineWidth=1.4; c.strokeStyle=o; c.fillStyle="#ffd75c";
+    c.beginPath(); c.moveTo(15,10); c.bezierCurveTo(12,14,10,20,4,22); c.quadraticCurveTo(7,27,13,23); c.lineTo(16,17); c.quadraticCurveTo(18,23,24,25); c.quadraticCurveTo(29,24,28,20); c.quadraticCurveTo(22,20,19,10); c.closePath(); c.fill(); c.stroke();
+    c.fillStyle="#fff1a4"; c.beginPath(); c.moveTo(15,11); c.quadraticCurveTo(13,22,16,26); c.quadraticCurveTo(20,26,19,21); c.lineTo(18,11); c.closePath(); c.fill(); c.stroke();
+    rounded(c,14,5,5,6,2,"#865441",o,.8);
   } else {
-    ellipse(c,16,16,10,10,"#d6f4f2",o,1.3);ellipse(c,16,16,7,7,"#76bfd3");
-    c.strokeStyle="#f8ffff"; c.lineWidth=1.5; for(let j=0;j<3;j++){c.save();c.translate(16,16);c.rotate(j*Math.PI/3);c.beginPath();c.moveTo(-6,0);c.lineTo(6,0);c.stroke();c.restore();}
+    // An icy-blue clock with a downward arrow communicates a slowing trap.
+    ellipse(c,16,16,12,12,"#ddf6f2",o,1.4); ellipse(c,16,16,9,9,"#4f9fb8","#34758f",1);
+    c.strokeStyle="#f8ffff"; c.lineWidth=2; c.beginPath(); c.moveTo(16,9); c.lineTo(16,16); c.lineTo(20,18); c.stroke();
+    shape(c,[7,22,11,22,11,17,14,17,14,22,18,22,12.5,27],"#fff2a6",o,1);
+
   }
 }
 export function createArt(scene: Phaser.Scene): void {

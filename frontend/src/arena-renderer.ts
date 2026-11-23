@@ -113,21 +113,21 @@ export class ArenaRenderer {
       const frame = moving ? 1 + Math.floor(now / 150) % 2 : 0;
       const back = player.direction.up && !player.direction.down;
       const sprite = this.image("players", `chibi-${i % 8}-${back ? "back" : "front"}-${frame}`, player.x, player.y, size, 10);
-      sprite.setDisplaySize(size * 1.02, size * 1.15).setOrigin(.5, .85).setFlipX(player.direction.left && !player.direction.right);
+      sprite.setDisplaySize(size * 1.15, size * 1.3).setOrigin(.5, .85).setFlipX(player.direction.left && !player.direction.right);
       if (player.slide) sprite.setRotation(Math.sin(now / 120) * .12);
       else if (!moving && player.status === "alive") sprite.setScale(sprite.scaleX, sprite.scaleY * (1 + .015 * Math.sin(now / 450 + i)));
       this.rings.lineStyle(2.3, colors[teams.indexOf(player.teamId) % colors.length], .95);
       this.rings.strokeEllipse(player.x, player.y + size * .18, size * .7, size * .27);
       if (player.status === "trapped") {
-        this.effects.fillStyle(0xa9efff, .32); this.effects.fillEllipse(player.x, player.y - size * .18, size * .9, size * 1.15);
-        this.effects.lineStyle(1.5, 0xe6ffff, .9); this.effects.strokeEllipse(player.x, player.y - size * .18, size * .9, size * 1.15);
-        this.effects.fillStyle(0xffffff, .85); this.effects.fillEllipse(player.x - size * .2, player.y - size * .48, size * .12, size * .07);
+        this.effects.fillStyle(0xa9efff, .32); this.effects.fillEllipse(player.x, player.y - size * .35, size * 1.02, size * 1.5);
+        this.effects.lineStyle(1.5, 0xe6ffff, .9); this.effects.strokeEllipse(player.x, player.y - size * .35, size * 1.02, size * 1.5);
+        this.effects.fillStyle(0xffffff, .85); this.effects.fillEllipse(player.x - size * .24, player.y - size * .78, size * .12, size * .07);
       }
     });
     this.bursts = this.bursts.filter(event => now - event.started < 650);
     for (const event of this.bursts) {
       const progress = (now - event.started) / 650, alpha = 1 - progress;
-      if (event.kind === "eliminated") this.image("ghosts", `chibi-${event.palette}-front-0`, event.x, event.y - progress * size, size, 15).setDisplaySize(size, size * 1.15).setOrigin(.5,.85).setAlpha(alpha * .7);
+      if (event.kind === "eliminated") this.image("ghosts", `chibi-${event.palette}-front-0`, event.x, event.y - progress * size, size, 15).setDisplaySize(size * 1.15, size * 1.3).setOrigin(.5,.85).setAlpha(alpha * .7);
       this.effects.lineStyle(2, event.kind === "trapped" ? 0xa8ebff : event.kind === "eliminated" ? 0xf0d0e8 : 0xffdf83, alpha);
       this.effects.strokeCircle(event.x, event.y, 5 + progress * 20);
       this.effects.fillStyle(0xfff6cf, alpha);

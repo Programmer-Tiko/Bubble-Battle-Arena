@@ -79,7 +79,7 @@ class ArenaScene extends Phaser.Scene {
       if (source instanceof HTMLCanvasElement) this.iconUrls[type] = source.toDataURL();
     }
     const { map } = adapter.snapshot();
-    this.cameras.main.setBounds(0, 0, map.width * map.tileSize, map.height * map.tileSize);
+    this.cameras.main.setZoom(2).setBounds(0, 0, map.width * map.tileSize, map.height * map.tileSize).centerOn(map.width * map.tileSize / 2, map.height * map.tileSize / 2);
     this.renderSnapshot(adapter.snapshot());
   }
   update(_time: number, delta: number): void {
@@ -164,12 +164,12 @@ class ArenaScene extends Phaser.Scene {
     }
     snapshot.players.forEach((player, index) => {
       if (player.status === "eliminated") return;
-      this.label(player.x - 7, player.y - map.tileSize * .9, player.status === "trapped" ? `${index + 1}: ${Math.ceil(player.trappedSeconds)}s` : String(index + 1));
+      this.label(player.x - 7, player.y - map.tileSize * 1.43, player.status === "trapped" ? `${index + 1}: ${Math.ceil(player.trappedSeconds)}s` : String(index + 1));
     });
   }
 }
 
 new Phaser.Game({
-  type: Phaser.AUTO, parent: "game", width: 480, height: 416, backgroundColor: "#132633",
+  type: Phaser.AUTO, parent: "game", width: 960, height: 832, backgroundColor: "#132633",
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }, scene: ArenaScene,
 });

@@ -20,3 +20,7 @@ Screenshots below include a local baseline, the redesigned local arena, a placed
 ## Final QA fixtures
 
 The [eight-player fixture](screenshots/qa-eight-player.png) places eight players and representative items, a bomb, a splash, and a trapped character in a controlled server state. It is not an eight-human playtest. The [bomb overlap fixture](screenshots/qa-bomb-overlap.png) shows a bomb and trap on a player tile; the bomb remains centered and is drawn above the player, with varying opacity to expose the co-located trap. The [supply preview](screenshots/qa-supply-preview.png) was captured from a two-client session advanced to 179 seconds; both clients received matching coordinates and observed the subsequent landing. The [loadout fixture](screenshots/qa-loadout.png) collected all five item types through the engine and used a banana charge.
+
+## Character and HUD visual refinement
+
+The [previous eight-player view](screenshots/qa-eight-player.png) and [refined view](screenshots/chibi-eight-after.png) use equivalent controlled fixtures. The updated original canvas vector artwork uses distinct curved hairstyles, larger expressive faces, layered outfits, and a higher-resolution render surface. The [updated loadout](screenshots/chibi-loadout-after.png) shows larger, higher-contrast stats and active slots, together with the redrawn banana and slowdown icons. The loadout fixture collects pickups through the engine and uses a banana charge; the screenshots are visual fixtures rather than an eight-human playtest.
