@@ -37,6 +37,7 @@ describe("Socket.IO authoritative sessions", () => {
     expect(session.game.placeBomb(playerId)).toBe(true);
     const state = (session.game as unknown as { state: GameState }).state;
     state.bombs[0].remainingSeconds = 1.2345;
+    state.players[0].status = "trapped"; state.players[0].trappedSeconds = 7.25;
     Object.assign(state.bombs[0], { internalOnly: "private-bomb-sentinel" });
     const bot = session.slots.find(s => s.bot)!.bot!, update = vi.spyOn(bot, "update");
     const observed: GameSnapshot[] = []; player.on("snapshot", s => observed.push(s));
@@ -48,6 +49,7 @@ describe("Socket.IO authoritative sessions", () => {
       expect(bomb).toBeDefined();
       expect(Object.keys(bomb!).sort()).toEqual(["id", "ownerId", "range", "x", "y"]);
       expect(JSON.stringify(snapshot)).not.toContain("private-bomb-sentinel");
+      expect(snapshot.players.every(player => !Object.hasOwn(player, "trappedSeconds"))).toBe(true);
     };
     if (!spectatorJoin.ok || !lateJoin.ok) throw new Error("Late join failed");
     assertPublic(spectatorJoin.value.snapshot); assertPublic(lateJoin.value.snapshot);
@@ -55,6 +57,7 @@ describe("Socket.IO authoritative sessions", () => {
     await vi.waitFor(() => expect(observed.length && spectatorSnapshots.length).toBeTruthy());
     assertPublic(observed.at(-1)!); assertPublic(spectatorSnapshots.at(-1)!);
     expect(update.mock.calls[0][0].bombs.find(b => b.ownerId === playerId)?.remainingSeconds).toBe(1.2345);
+    expect(update.mock.calls[0][0].players.find(p => p.id === playerId)?.trappedSeconds).toBe(7.25);
     expect(session.game.getSnapshot().bombs[0].remainingSeconds).toBeCloseTo(1.2345 - 1 / 30);
   });
   it("delivers the same authoritative supply locations to players, spectators, and late joins", async () => {

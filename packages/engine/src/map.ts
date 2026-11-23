@@ -8,7 +8,7 @@ export interface MapConfig {
 }
 /** Temporary gameplay defaults; dimensions, densities and spacing are not final rules. */
 export const DEFAULT_MAP_CONFIG: MapConfig = {
-  width: 15, height: 13, tileSize: 32, playerCount: 4,
+  width: 30, height: 26, tileSize: 32, playerCount: 4,
   indestructibleDensity: 0.06, destructibleDensity: 0.22, maxAttempts: 100, seed: 1,
 };
 export interface GeneratedMap { map: ArenaMap; spawns: GridPosition[]; usedFallback: boolean }
@@ -40,6 +40,15 @@ export function areSpawnsConnected(map: ArenaMap, spawns: GridPosition[]): boole
     }
   }
   return spawns.every(p => seen.has(key(p.x, p.y)));
+}
+/** Remove isolated floor pockets so every initially traversable tile is reachable. */
+function sealDisconnectedFloors(map: ArenaMap, start: GridPosition): void {
+  const seen = new Set([key(start.x, start.y)]), queue = [start];
+  for (let i = 0; i < queue.length; i++) for (const next of neighbors(queue[i])) {
+    const k = key(next.x, next.y);
+    if (map.tiles[next.y]?.[next.x]?.type === "floor" && !seen.has(k)) { seen.add(k); queue.push(next); }
+  }
+  for (const tile of map.tiles.flat()) if (tile.type === "floor" && !seen.has(key(tile.x, tile.y))) tile.type = "destructible";
 }
 /** Build a reproducible map, falling back to an open interior after bounded retries. */
 export function generateMap(overrides: Partial<MapConfig> = {}): GeneratedMap {
@@ -76,7 +85,7 @@ export function generateMap(overrides: Partial<MapConfig> = {}): GeneratedMap {
   });
   for (let i = 0; i < c.maxAttempts; i++) {
     const map = build(false);
-    if (areSpawnsConnected(map, spawns)) return { map, spawns, usedFallback: false };
+    if (areSpawnsConnected(map, spawns)) { sealDisconnectedFloors(map, spawns[0]); return { map, spawns, usedFallback: false }; }
   }
   return { map: build(true), spawns, usedFallback: true };
 }

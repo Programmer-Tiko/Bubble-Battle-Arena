@@ -7,6 +7,7 @@ export type TrapType = "banana" | "slowdown";
 export interface InventorySlot { type: TrapType; charges: number }
 export interface GroundItem { id: number; type: ItemType; x: number; y: number; kind: "pickup" | "hazard" | "trap"; ownerId?: string; active: boolean; supplyDroppedAt?: number }
 export interface PlayerState { boots: number; capacityUpgrades: number; rangeUpgrades: number; inventory: (InventorySlot | null)[]; slowSeconds: number; slide: MovementInput | null; direction: MovementInput; id: string; teamId: string; x: number; y: number; status: "alive" | "trapped" | "eliminated"; trappedSeconds: number }
+export type PublicPlayerState = Omit<PlayerState, "trappedSeconds">;
 /** Directional intent suitable for either WASD or arrow keys. */
 export interface MovementInput { up: boolean; down: boolean; left: boolean; right: boolean }
 export interface BombState { id: number; ownerId: string; x: number; y: number; remainingSeconds: number; range: number }
@@ -20,7 +21,7 @@ export interface GameState { tick: number; elapsedSeconds: number; result: Match
 /** Full state is for the authoritative engine and server-side bot only. */
 export interface AuthoritativeGameSnapshot extends GameState {}
 /** Network snapshots must use a server-side projection, not a type cast. */
-export interface GameSnapshot extends Omit<GameState, "bombs"> { bombs: PublicBombState[] }
+export interface GameSnapshot extends Omit<GameState, "bombs" | "players"> { bombs: PublicBombState[]; players: PublicPlayerState[] }
 
 /** Development protocol: clients submit intent only, never gameplay state or identity. */
 export type SessionMode = "ffa" | "team";

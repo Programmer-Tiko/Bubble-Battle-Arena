@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { io, type Socket } from "socket.io-client";
 import type { ClientEvents, GameState, GameSnapshot, JoinInfo, Reply, ServerEvents } from "@bubble/shared";
-import { createGameServer, type Session } from "../src/server.js";
+import { createGameServer, publicSnapshot, type Session } from "../src/server.js";
 
 let server: ReturnType<typeof createGameServer>, url: string;
 let sockets: Socket<ServerEvents, ClientEvents>[];
@@ -60,7 +60,7 @@ describe("server-controlled bots", () => {
     expect(initial.players).toHaveLength(4);
     const moved = session.game.getSnapshot();
     expect(moved.players.slice(1).some((p, i) => Math.hypot(p.x - initial.players[i + 1].x, p.y - initial.players[i + 1].y) > 5)).toBe(true);
-    expect(seen.at(-1)).toEqual(moved);
+    expect(seen.at(-1)).toEqual(JSON.parse(JSON.stringify(publicSnapshot(moved))));
   });
   it("collects a pickup by navigating real movement and avoids walls", () => {
     const session = server.create("ffa", 4, 1), s = openArena(session), bot = s.players[3], size = s.map.tileSize;

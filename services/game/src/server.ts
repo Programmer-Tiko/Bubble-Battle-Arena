@@ -22,7 +22,7 @@ export interface Session { id: string; game: Game; slots: Slot[]; timer?: Return
 /** Explicit allowlists keep server-only bomb fields out of every ordinary client event. */
 export function publicSnapshot(snapshot: AuthoritativeGameSnapshot): GameSnapshot {
   const { tick, elapsedSeconds, result, map, players, explosions, items, balloon, supplyPreview } = snapshot;
-  return { tick, elapsedSeconds, result, map, players, explosions, items, balloon, supplyPreview,
+  return { tick, elapsedSeconds, result, map, players: players.map(({ trappedSeconds: _hidden, ...player }) => player), explosions, items, balloon, supplyPreview,
     bombs: snapshot.bombs.map(({ id, ownerId, x, y, range }) => ({ id, ownerId, x, y, range })) };
 }
 

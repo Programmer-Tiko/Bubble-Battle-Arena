@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Game } from "@bubble/engine";
 import type { GameState } from "@bubble/shared";
-import { bombAppearance, characterStats, displayItems, supplyMarkers, tileCenter, visibleBombs, visibleItems } from "../src/visual-model";
+import { balloonFlightX, bombAppearance, characterStats, displayItems, supplyMarkers, tileCenter, visibleBombs, visibleItems } from "../src/visual-model";
 
 describe("authoritative visual projection", () => {
+  it("moves the balloon at two thirds of the previous visual speed", () => {
+    expect(balloonFlightX(10, 310, .5)).toBe(110);
+  });
   it("keeps a bomb visible above a player and cycles a co-located trap into view", () => {
     const game = new Game(["a"]), state = (game as unknown as { state: GameState }).state;
     const player = state.players[0], size = state.map.tileSize, x = Math.floor(player.x / size), y = Math.floor(player.y / size);

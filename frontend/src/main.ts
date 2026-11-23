@@ -5,6 +5,8 @@ import { NetworkGameAdapter } from "./network";
 import { SessionDebug } from "./session-debug";
 import { ArenaRenderer } from "./arena-renderer";
 import { characterStats } from "./visual-model";
+import { cameraCenter, minimapPoint } from "./viewport";
+import { drawStylePreview } from "./style-preview";
 import "./style.css";
 
 let adapter: GameAdapter = new LocalGameAdapter();
@@ -62,6 +64,10 @@ class ArenaScene extends Phaser.Scene {
   private iconUrls: Record<string, string> = {};
   private labels: Phaser.GameObjects.Text[] = [];
   private labelCount = 0;
+  private mapCache = "";
+  private terrain = document.createElement("canvas");
+  private cameraIdentity = "";
+  private spectatorCenter = { x: 240, y: 208 };
   private label(x: number, y: number, text: string): void {
     const label = this.labels[this.labelCount] ?? this.add.text(0, 0, "", { fontSize: "11px", color: "#ffffff", backgroundColor: "#132633" }).setDepth(30);
     this.labels[this.labelCount++] = label; label.setPosition(x, y).setText(text).setVisible(true);
@@ -74,6 +80,13 @@ class ArenaScene extends Phaser.Scene {
     this.input.keyboard.addCapture(["UP", "DOWN", "LEFT", "RIGHT"]);
     this.graphics = this.add.graphics().setDepth(3);
     this.arena = new ArenaRenderer(this);
+    const stylePreview = document.querySelector<HTMLSelectElement>("#style-preview")!;
+    const previewCanvas = document.querySelector<HTMLCanvasElement>("#style-preview-canvas")!;
+    const showStyle = () => {
+      const source = this.textures.get(`chibi-${stylePreview.selectedIndex}-front-0`).getSourceImage();
+      if (source instanceof HTMLCanvasElement || source instanceof HTMLImageElement) drawStylePreview(previewCanvas, source, stylePreview.selectedIndex);
+    };
+    stylePreview.onchange = showStyle; showStyle();
     for (const type of ["banana", "slowdown"]) {
       const source = this.textures.get(`item-${type}`).getSourceImage();
       if (source instanceof HTMLCanvasElement) this.iconUrls[type] = source.toDataURL();
@@ -107,6 +120,18 @@ class ArenaScene extends Phaser.Scene {
     adapter.advance(delta);
     const snapshot = adapter.snapshot();
     const player = snapshot.players.find(p => p.id === adapter.playerId);
+    const identity = network?.sessionId ?? "local";
+    if (identity !== this.cameraIdentity) {
+      this.cameraIdentity = identity; this.mapCache = "";
+      this.spectatorCenter = { x: snapshot.map.width * snapshot.map.tileSize / 2, y: snapshot.map.height * snapshot.map.tileSize / 2 };
+      this.cameras.main.setBounds(0, 0, snapshot.map.width * snapshot.map.tileSize, snapshot.map.height * snapshot.map.tileSize);
+    }
+    if (!player || player.status === "eliminated") {
+      const dx = Number(input.right) - Number(input.left), dy = Number(input.down) - Number(input.up);
+      this.spectatorCenter = cameraCenter(snapshot.map, this.spectatorCenter.x + dx * delta * .25, this.spectatorCenter.y + dy * delta * .25);
+    } else this.spectatorCenter = cameraCenter(snapshot.map, player.x, player.y);
+    this.cameras.main.centerOn(this.spectatorCenter.x, this.spectatorCenter.y);
+    this.renderMinimap(snapshot, player);
     const remaining = Math.max(0, 600 - snapshot.elapsedSeconds);
     const winningTeam = snapshot.result?.kind === "winner" ? snapshot.result.teamId : undefined;
     const winners = winningTeam ? snapshot.players.filter(p => p.teamId === winningTeam) : [];
@@ -118,6 +143,24 @@ class ArenaScene extends Phaser.Scene {
     resultPanel.hidden = !snapshot.result; resultPanel.textContent = result;
     this.updateLoadout(player);
     this.renderSnapshot(snapshot);
+  }
+  private renderMinimap(snapshot: GameSnapshot, player: GameSnapshot["players"][number] | undefined): void {
+    const canvas = document.querySelector<HTMLCanvasElement>("#minimap")!, context = canvas.getContext("2d")!;
+    const { map } = snapshot, signature = `${map.width}x${map.height}:` + map.tiles.map(row => row.map(tile => tile.type[0]).join("")).join("");
+    if (signature !== this.mapCache) {
+      this.mapCache = signature; this.terrain.width = canvas.width; this.terrain.height = canvas.height;
+      const terrain = this.terrain.getContext("2d")!;
+      for (const row of map.tiles) for (const tile of row) {
+        terrain.fillStyle = tile.type === "floor" ? "#dcece0" : tile.type === "destructible" ? "#b77a52" : "#526d77";
+        terrain.fillRect(tile.x * canvas.width / map.width, tile.y * canvas.height / map.height, Math.ceil(canvas.width / map.width), Math.ceil(canvas.height / map.height));
+      }
+    }
+    context.clearRect(0, 0, canvas.width, canvas.height); context.drawImage(this.terrain, 0, 0);
+    if (player && player.status !== "eliminated") {
+      const p = minimapPoint(map, player.x, player.y, canvas.width, canvas.height);
+      context.fillStyle = "#dd5268"; context.strokeStyle = "#fff"; context.lineWidth = 2;
+      context.beginPath(); context.arc(p.x, p.y, 4, 0, Math.PI * 2); context.fill(); context.stroke();
+    }
   }
   private updateLoadout(player: GameSnapshot["players"][number] | undefined): void {
     if (!player) {
@@ -164,7 +207,7 @@ class ArenaScene extends Phaser.Scene {
     }
     snapshot.players.forEach((player, index) => {
       if (player.status === "eliminated") return;
-      this.label(player.x - 7, player.y - map.tileSize * 1.43, player.status === "trapped" ? `${index + 1}: ${Math.ceil(player.trappedSeconds)}s` : String(index + 1));
+      this.label(player.x - 7, player.y - map.tileSize * 1.43, String(index + 1));
     });
   }
 }

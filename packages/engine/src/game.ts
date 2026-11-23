@@ -5,6 +5,9 @@ import { DEFAULT_MOVEMENT_CONFIG, movePlayer, type MovementConfig } from "./move
 import { visitBlast } from "./blast.js";
 
 const IDLE: MovementInput = { up: false, down: false, left: false, right: false };
+const freshRandom = () => globalThis.crypto?.getRandomValues
+  ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000
+  : Math.random();
 /** Provisional values until the team agrees on limits and visual duration. */
 export interface MatchConfig { mode: "ffa" | "team"; teams?: Record<string, string>; timeLimitSeconds?: number }
 export interface ItemConfig { initialOtherPerType: number; chargesPerHazard: number }
@@ -46,11 +49,7 @@ export class Game {
     }
     // Explicit seeds retain reproducible simulations; ordinary matches need fresh,
     // private randomness rather than the fixed default map seed.
-    this.supplyRandom = mapConfig.seed === undefined
-      ? () => globalThis.crypto?.getRandomValues
-        ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000
-        : Math.random()
-      : seededRandom(mapConfig.seed ^ 0x5a17b411);
+    this.supplyRandom = mapConfig.seed === undefined ? freshRandom : seededRandom(mapConfig.seed ^ 0x5a17b411);
     const { map, spawns } = generateMap({ ...mapConfig, playerCount: playerIds.length });
     this.movement = { ...DEFAULT_MOVEMENT_CONFIG, ...movementConfig };
     if (!Number.isFinite(this.movement.speed) || this.movement.speed < 0 || !Number.isFinite(this.movement.timestepSeconds) || this.movement.timestepSeconds <= 0 ||
@@ -144,9 +143,11 @@ export class Game {
     for (const [type, count] of [["boots", p.boots], ["capacity", p.capacityUpgrades], ["range", p.rangeUpgrades]] as const)
       for (let i = 0; i < count; i++) types.push({ type, kind: "pickup" });
     for (const slot of p.inventory) if (slot) for (let i = 0; i < slot.charges; i += this.itemConfig.chargesPerHazard) types.push({ type: slot.type, kind: "hazard" });
-    const size = this.state.map.tileSize, px = Math.floor(p.x / size), py = Math.floor(p.y / size);
-    const tiles = this.state.map.tiles.flat().filter(t => t.type === "floor" && !this.state.bombs.some(b => b.x === t.x && b.y === t.y) && !this.state.items.some(i => i.x === t.x && i.y === t.y) && !this.state.players.some(other => other.status !== "eliminated" && Math.floor(other.x / size) === t.x && Math.floor(other.y / size) === t.y))
-      .sort((a, b) => (Math.abs(a.x-px)+Math.abs(a.y-py)) - (Math.abs(b.x-px)+Math.abs(b.y-py)) || a.y-b.y || a.x-b.x);
+    const size = this.state.map.tileSize;
+    const tiles = this.state.map.tiles.flat().filter(t => t.type === "floor" && !this.state.bombs.some(b => b.x === t.x && b.y === t.y) && !this.state.items.some(i => i.x === t.x && i.y === t.y) && !this.state.players.some(other => other.status !== "eliminated" && Math.floor(other.x / size) === t.x && Math.floor(other.y / size) === t.y));
+    for (let i = tiles.length - 1; i > 0; i--) {
+      const j = Math.floor(freshRandom() * (i + 1)); [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+    }
     // Multiple drops share valid tiles when there are more drops than free tiles.
     for (let i = 0; i < types.length && tiles.length; i++) this.addItem(types[i].type, tiles[i % tiles.length].x, tiles[i % tiles.length].y, types[i].kind);
     p.boots = p.capacityUpgrades = p.rangeUpgrades = 0; p.inventory = Array(5).fill(null);

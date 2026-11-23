@@ -1,7 +1,7 @@
 ﻿import Phaser from "phaser";
 import type { GameSnapshot, PlayerState } from "@bubble/shared";
 import { createArt } from "./art";
-import { bombAppearance, displayItems, supplyMarkers, visibleBombs } from "./visual-model";
+import { balloonFlightX, bombAppearance, displayItems, supplyMarkers, visibleBombs } from "./visual-model";
 
 const colors = [0x6394d1, 0xf4ad65, 0xe983a1, 0xa18bd4, 0x60b7a2, 0xdec36c, 0xbc8d79, 0x91a6bc];
 type PoolName = "items" | "bombs" | "splash" | "markers" | "players" | "ghosts" | "balloon";
@@ -73,8 +73,7 @@ export class ArenaRenderer {
     for (let i = index; i < this.tiles.length; i++) this.tiles[i].setVisible(false);
     const markers = supplyMarkers(snapshot);
     for (const marker of markers) {
-      const pulse = 1 + Math.sin(now / 240 + marker.id) * .06;
-      this.image("markers", "landing", marker.x, marker.y, size * 1.18 * pulse, 19).setAlpha(.95);
+      this.image("markers", "landing", marker.x, marker.y, size, 2).setAlpha(.95);
     }
     for (const { item, count, crowded } of displayItems(snapshot, now)) {
       const sprite = this.image("items", `item-${item.type}`, item.position.x, item.position.y, size * (crowded ? .5 : .84), crowded ? 12 : 5);
@@ -101,9 +100,7 @@ export class ArenaRenderer {
         ? Phaser.Math.Clamp((snapshot.elapsedSeconds - preview.announcedAt) / Math.max(.001, preview.scheduledAt - preview.announcedAt), 0, 1)
         : Phaser.Math.Clamp((snapshot.elapsedSeconds - snapshot.balloon!.startedAt) / snapshot.balloon!.durationSeconds, 0, 1);
       const destination = preview && markers.length ? markers.reduce((sum, marker) => sum + marker.x, 0) / markers.length : map.width * size + size;
-      const x = size * .7 + progress * (destination - size * .7);
-      this.rings.lineStyle(1, 0xffd68c, .3);
-      for (const marker of markers) this.rings.lineBetween(x, size * 1.35, marker.x, marker.y);
+      const x = balloonFlightX(size * .7, destination, progress);
       this.image("balloon", "balloon", x, size * 1.15, size * 1.45, 18).setDisplaySize(size * 1.45, size * 1.8);
     }
     const teams = [...new Set(snapshot.players.map(p => p.teamId))].sort();

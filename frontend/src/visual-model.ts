@@ -1,8 +1,10 @@
-import type { GameSnapshot, PlayerState } from "@bubble/shared";
+import type { GameSnapshot, PublicPlayerState } from "@bubble/shared";
 import { DEFAULT_BOMB_CONFIG } from "@bubble/engine";
 
 /** Gameplay object coordinates are authoritative tile indices, not player positions. */
 export const tileCenter = (x: number, y: number, tileSize: number) => ({ x: (x + 0.5) * tileSize, y: (y + 0.5) * tileSize });
+/** Cosmetic flight speed is two thirds of the former interpolation speed. */
+export const balloonFlightX = (start: number, destination: number, progress: number) => start + (destination - start) * progress * (2 / 3);
 /** The normal renderer receives no fuse value and therefore cannot display a countdown. */
 export function visibleBombs(snapshot: GameSnapshot) {
   return snapshot.bombs.map(({ id, x, y }) => ({ id, ...tileCenter(x, y, snapshot.map.tileSize) }));
@@ -35,6 +37,6 @@ export function displayItems(snapshot: GameSnapshot, now: number) {
 export function supplyMarkers(snapshot: GameSnapshot) {
   return (snapshot.supplyPreview?.tiles ?? []).map((tile, id) => ({ id, ...tileCenter(tile.x, tile.y, snapshot.map.tileSize) }));
 }
-export function characterStats(player: PlayerState) {
+export function characterStats(player: PublicPlayerState) {
   return { speedPercent: player.slowSeconds > 0 ? 50 : 100 + player.boots * 10, boots: player.boots, capacity: DEFAULT_BOMB_CONFIG.initialCapacity + player.capacityUpgrades, range: 1 + player.rangeUpgrades, inventory: player.inventory };
 }

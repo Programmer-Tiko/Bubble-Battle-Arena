@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GameState, GroundItem, MovementInput } from "@bubble/shared";
 import { Game } from "../src/index.js";
 
@@ -18,6 +18,22 @@ function add(state: GameState, type: GroundItem["type"], x = 5, y = 5, kind: Gro
 function steps(game: Game, count: number) { for (let i = 0; i < count; i++) game.step(); }
 
 describe("items and inventory", () => {
+  it("randomizes elimination drop locations while preserving item quantities", () => {
+    const random = vi.spyOn(globalThis.crypto, "getRandomValues");
+    try {
+      const drop = (value: number) => {
+        random.mockImplementation(array => { (array as Uint32Array)[0] = value; return array; });
+        const { game, state } = fixture();
+        state.players[0].boots = 2; state.players[0].inventory[0] = { type: "banana", charges: 2 };
+        state.players[0].status = "trapped"; state.players[0].trappedSeconds = .1; game.step();
+        return game.getSnapshot().items;
+      };
+      const a = drop(0), b = drop(0xffffffff);
+      expect(a.map(i => [i.type, i.kind]).sort()).toEqual(b.map(i => [i.type, i.kind]).sort());
+      expect(a).toHaveLength(4); expect(b).toHaveLength(4);
+      expect(a.map(i => [i.x, i.y])).not.toEqual(b.map(i => [i.x, i.y]));
+    } finally { random.mockRestore(); }
+  });
   it("starts with exactly four collectible boots and detached snapshots", () => {
     const game = new Game(["a"]);
     const snapshot = game.getSnapshot();
