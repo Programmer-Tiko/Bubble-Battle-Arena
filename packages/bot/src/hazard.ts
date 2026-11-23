@@ -1,5 +1,5 @@
 import { DEFAULT_BOMB_CONFIG, DEFAULT_MOVEMENT_CONFIG, visitBlast, type BombConfig } from "@bubble/engine";
-import type { BombState, GameSnapshot } from "@bubble/shared";
+import type { BombState, AuthoritativeGameSnapshot as GameSnapshot } from "@bubble/shared";
 
 export interface Interval { start: number; end: number }
 const key = (x: number, y: number) => `${x},${y}`;

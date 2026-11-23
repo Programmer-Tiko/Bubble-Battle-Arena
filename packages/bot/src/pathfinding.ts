@@ -1,5 +1,5 @@
 import { DEFAULT_MOVEMENT_CONFIG } from "@bubble/engine";
-import type { GameSnapshot, PlayerState } from "@bubble/shared";
+import type { AuthoritativeGameSnapshot as GameSnapshot, PlayerState } from "@bubble/shared";
 import { HazardMap } from "./hazard.js";
 
 export interface Waypoint { x: number; y: number; time: number }

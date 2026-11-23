@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { io, type Socket } from "socket.io-client";
-import type { ClientEvents, ServerEvents, JoinInfo, GameState, Reply } from "@bubble/shared";
+import type { ClientEvents, ServerEvents, JoinInfo, GameState, GameSnapshot, Reply } from "@bubble/shared";
 import { createGameServer, type Session } from "../src/server.js";
 import { supplyMarkers } from "../../../frontend/src/visual-model.js";
 
@@ -29,10 +29,38 @@ beforeEach(async () => {
 afterEach(async () => { for (const socket of sockets) socket.disconnect(); await server.close(); });
 
 describe("Socket.IO authoritative sessions", () => {
+  it("sends fuse-free bombs to players and spectators in join replies and every snapshot", async () => {
+    const session = server.create("ffa", 4, 1), player = await client();
+    const joined = await join(player, session); expect(joined.ok).toBe(true);
+    if (!joined.ok || !joined.value.playerId) throw new Error("Player failed to join");
+    const playerId = joined.value.playerId;
+    expect(session.game.placeBomb(playerId)).toBe(true);
+    const state = (session.game as unknown as { state: GameState }).state;
+    state.bombs[0].remainingSeconds = 1.2345;
+    Object.assign(state.bombs[0], { internalOnly: "private-bomb-sentinel" });
+    const bot = session.slots.find(s => s.bot)!.bot!, update = vi.spyOn(bot, "update");
+    const observed: GameSnapshot[] = []; player.on("snapshot", s => observed.push(s));
+    const spectator = await client(), latePlayer = await client();
+    const spectatorJoin = await join(spectator, session, "spectator"), lateJoin = await join(latePlayer, session);
+    const spectatorSnapshots: GameSnapshot[] = []; spectator.on("snapshot", s => spectatorSnapshots.push(s));
+    const assertPublic = (snapshot: GameSnapshot) => {
+      const bomb = snapshot.bombs.find(b => b.ownerId === playerId);
+      expect(bomb).toBeDefined();
+      expect(Object.keys(bomb!).sort()).toEqual(["id", "ownerId", "range", "x", "y"]);
+      expect(JSON.stringify(snapshot)).not.toContain("private-bomb-sentinel");
+    };
+    if (!spectatorJoin.ok || !lateJoin.ok) throw new Error("Late join failed");
+    assertPublic(spectatorJoin.value.snapshot); assertPublic(lateJoin.value.snapshot);
+    steps(session, 1);
+    await vi.waitFor(() => expect(observed.length && spectatorSnapshots.length).toBeTruthy());
+    assertPublic(observed.at(-1)!); assertPublic(spectatorSnapshots.at(-1)!);
+    expect(update.mock.calls[0][0].bombs.find(b => b.ownerId === playerId)?.remainingSeconds).toBe(1.2345);
+    expect(session.game.getSnapshot().bombs[0].remainingSeconds).toBeCloseTo(1.2345 - 1 / 30);
+  });
   it("delivers the same authoritative supply locations to players, spectators, and late joins", async () => {
     const session = server.create("ffa", 4), player = await client(), spectator = await client();
     await join(player, session); await join(spectator, session, "spectator");
-    const seenPlayer: GameState[] = [], seenSpectator: GameState[] = [];
+    const seenPlayer: GameSnapshot[] = [], seenSpectator: GameSnapshot[] = [];
     player.on("snapshot", s => seenPlayer.push(s)); spectator.on("snapshot", s => seenSpectator.push(s));
     const state = (session.game as unknown as { state: GameState }).state;
     state.tick = 5369; state.elapsedSeconds = 5369 / 30;
@@ -80,7 +108,7 @@ describe("Socket.IO authoritative sessions", () => {
     expect(joins.every(result => result.ok)).toBe(true);
     const ids = joins.map(result => result.ok ? result.value.playerId : null);
     expect(new Set(ids).size).toBe(count);
-    const snapshots: GameState[] = [];
+    const snapshots: GameSnapshot[] = [];
     for (const socket of clients) socket.once("snapshot", snapshot => snapshots.push(snapshot));
     steps(session, 1);
     await vi.waitFor(() => expect(snapshots).toHaveLength(count));
@@ -110,7 +138,7 @@ describe("Socket.IO authoritative sessions", () => {
     const a = server.create("ffa", 4), b = server.create("ffa", 4), player = await client(), observer = await client(), other = await client();
     const joined = await join(player, a); expect(joined.ok).toBe(true); if (!joined.ok) return;
     await join(observer, a, "spectator"); await join(other, b, "spectator");
-    const seen: GameState[] = [], leaked: GameState[] = [];
+    const seen: GameSnapshot[] = [], leaked: GameSnapshot[] = [];
     observer.on("snapshot", s => seen.push(s)); other.on("snapshot", s => leaked.push(s));
     expect((await command(player, "move", { seq: 0, input: { ...idle, right: true } })).ok).toBe(true);
     steps(a, 3); await vi.waitFor(() => expect(seen.at(-1)?.tick).toBe(3));
@@ -141,7 +169,7 @@ describe("Socket.IO authoritative sessions", () => {
   });
   it("broadcasts trapping, rescue, elimination, item and balloon state from the engine", async () => {
     const session = server.create("team", 4), one = await client(), two = await client(); await join(one, session, "spectator"); await join(two, session, "spectator");
-    const snapshots1: GameState[] = [], snapshots2: GameState[] = []; one.on("snapshot", s => snapshots1.push(s)); two.on("snapshot", s => snapshots2.push(s));
+    const snapshots1: GameSnapshot[] = [], snapshots2: GameSnapshot[] = []; one.on("snapshot", s => snapshots1.push(s)); two.on("snapshot", s => snapshots2.push(s));
     const state = (session.game as unknown as { state: GameState }).state;
     const [a, ally, enemy] = state.players; a.x = ally.x = 160; a.y = ally.y = 160; enemy.x = 300; enemy.y = 300;
     a.status = "trapped"; a.trappedSeconds = 10; steps(session, 1); await vi.waitFor(() => expect(snapshots1.at(-1)?.players[0].status).toBe("alive"));
@@ -155,7 +183,7 @@ describe("Socket.IO authoritative sessions", () => {
   it("synchronizes a bomb trapping and timing out its owner", async () => {
     const session = server.create("ffa", 4), player = await client(), spectator = await client();
     const joined = await join(player, session); if (!joined.ok) throw new Error(joined.error);
-    await join(spectator, session, "spectator"); const seen: GameState[] = []; spectator.on("snapshot", s => seen.push(s));
+    await join(spectator, session, "spectator"); const seen: GameSnapshot[] = []; spectator.on("snapshot", s => seen.push(s));
     expect((await command(player, "bomb", { seq: 0 })).ok).toBe(true);
     steps(session, 90);
     await vi.waitFor(() => expect(seen.some(s => s.explosions.length > 0 && s.players.find(p => p.id === joined.value.playerId)?.status === "trapped")).toBe(true), { timeout: 5000 });
@@ -222,7 +250,7 @@ describe("Socket.IO authoritative sessions", () => {
   it("keeps combat running safely when a player disconnects", async () => {
     const session = server.create("ffa", 4), player = await client(), spectator = await client();
     const joined = await join(player, session); if (!joined.ok) throw new Error(joined.error); await join(spectator, session, "spectator");
-    const seen: GameState[] = []; spectator.on("snapshot", snapshot => seen.push(snapshot));
+    const seen: GameSnapshot[] = []; spectator.on("snapshot", snapshot => seen.push(snapshot));
     expect((await command(player, "bomb", { seq: 0 })).ok).toBe(true); player.disconnect();
     await vi.waitFor(() => expect(session.slots[0].socketId).toBeUndefined()); steps(session, 90);
     await vi.waitFor(() => expect(seen.some(s => s.explosions.length > 0)).toBe(true), { timeout: 5000 });

@@ -1,4 +1,4 @@
-import type { BombState, GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
+import type { BombState, AuthoritativeGameSnapshot as GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
 import { DEFAULT_MAP_CONFIG, generateMap, type MapConfig } from "./map.js";
 import { seededRandom } from "./random.js";
 import { DEFAULT_MOVEMENT_CONFIG, movePlayer, type MovementConfig } from "./movement.js";

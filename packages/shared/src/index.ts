@@ -10,12 +10,17 @@ export interface PlayerState { boots: number; capacityUpgrades: number; rangeUpg
 /** Directional intent suitable for either WASD or arrow keys. */
 export interface MovementInput { up: boolean; down: boolean; left: boolean; right: boolean }
 export interface BombState { id: number; ownerId: string; x: number; y: number; remainingSeconds: number; range: number }
+/** Bomb data safe to send to ordinary players and spectators. */
+export type PublicBombState = Omit<BombState, "remainingSeconds">;
 export interface ExplosionState { id: number; x: number; y: number; remainingSeconds: number }
 export interface BalloonState { startedAt: number; durationSeconds: number }
 export type MatchResult = { kind: "winner"; teamId: string } | { kind: "draw" };
 export interface SupplyPreview { announcedAt: number; scheduledAt: number; tiles: { x: number; y: number }[] }
 export interface GameState { tick: number; elapsedSeconds: number; result: MatchResult | null; map: ArenaMap; players: PlayerState[]; bombs: BombState[]; explosions: ExplosionState[]; items: GroundItem[]; balloon: BalloonState | null; supplyPreview: SupplyPreview | null }
-export interface GameSnapshot extends GameState {}
+/** Full state is for the authoritative engine and server-side bot only. */
+export interface AuthoritativeGameSnapshot extends GameState {}
+/** Network snapshots must use a server-side projection, not a type cast. */
+export interface GameSnapshot extends Omit<GameState, "bombs"> { bombs: PublicBombState[] }
 
 /** Development protocol: clients submit intent only, never gameplay state or identity. */
 export type SessionMode = "ffa" | "team";
