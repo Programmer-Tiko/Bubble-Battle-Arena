@@ -1,7 +1,7 @@
 ﻿import Phaser from "phaser";
 import type { GameSnapshot, PlayerState } from "@bubble/shared";
 import { createArt } from "./art";
-import { supplyMarkers, visibleBombs, visibleItems } from "./visual-model";
+import { displayItems, supplyMarkers, visibleBombs } from "./visual-model";
 
 const colors = [0x6394d1, 0xf4ad65, 0xe983a1, 0xa18bd4, 0x60b7a2, 0xdec36c, 0xbc8d79, 0x91a6bc];
 type PoolName = "items" | "bombs" | "splash" | "markers" | "players" | "ghosts" | "balloon";
@@ -74,13 +74,16 @@ export class ArenaRenderer {
     const markers = supplyMarkers(snapshot);
     for (const marker of markers) {
       const pulse = 1 + Math.sin(now / 240 + marker.id) * .06;
-      this.image("markers", "landing", marker.x, marker.y, size * 1.18 * pulse, 2).setAlpha(.95);
+      this.image("markers", "landing", marker.x, marker.y, size * 1.18 * pulse, 19).setAlpha(.95);
     }
-    for (const item of visibleItems(snapshot)) {
-      const sprite = this.image("items", `item-${item.type}`, item.position.x, item.position.y, size * .84, 5);
+    for (const { item, count, crowded } of displayItems(snapshot, now)) {
+      const sprite = this.image("items", `item-${item.type}`, item.position.x, item.position.y, size * (crowded ? .5 : .84), crowded ? 12 : 5);
       if (item.kind !== "pickup") {
         sprite.setAlpha(item.kind === "trap" && !item.active ? .62 : 1);
         this.rings.lineStyle(1.6, 0x73536b, .9); this.rings.strokeCircle(item.position.x, item.position.y, size * .36);
+      }
+      if (count > 1) {
+        this.effects.fillStyle(0xffecb2, .95); this.effects.fillCircle(item.position.x + size * .32, item.position.y - size * .32, size * .1);
       }
     }
     for (const explosion of snapshot.explosions) {

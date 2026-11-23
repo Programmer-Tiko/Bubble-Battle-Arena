@@ -1,9 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { Game } from "@bubble/engine";
 import type { GameState } from "@bubble/shared";
-import { characterStats, supplyMarkers, tileCenter, visibleBombs, visibleItems } from "../src/visual-model";
+import { characterStats, displayItems, supplyMarkers, tileCenter, visibleBombs, visibleItems } from "../src/visual-model";
 
 describe("authoritative visual projection", () => {
+  it("cycles overlapping item icons at the tile centre while retaining bomb and player visibility", () => {
+    const game = new Game(["a"]), state = (game as unknown as { state: GameState }).state;
+    const p = state.players[0], x = Math.floor(p.x / state.map.tileSize), y = Math.floor(p.y / state.map.tileSize);
+    state.items = [
+      { id: 100, type: "boots", kind: "pickup", active: true, x, y },
+      { id: 101, type: "banana", kind: "trap", active: true, x, y },
+    ];
+    game.placeBomb("a"); const snapshot = game.getSnapshot();
+    const first = displayItems(snapshot, 0)[0], second = displayItems(snapshot, 650)[0];
+    expect(first).toMatchObject({ count: 2, crowded: true, item: { id: 100 } });
+    expect(second.item.id).toBe(101);
+    expect(first.item.position).toEqual(tileCenter(x, y, state.map.tileSize));
+    expect(second.item.position).toEqual(first.item.position);
+    expect(visibleBombs(snapshot)[0]).toMatchObject(first.item.position);
+  });
   it("never passes bomb fuse information to the normal player or spectator renderer", () => {
     const game = new Game(["a"]); game.placeBomb("a");
     const playerSnapshot = game.getSnapshot(), spectatorSnapshot = structuredClone(playerSnapshot);
@@ -27,14 +42,14 @@ describe("authoritative visual projection", () => {
   it("shows server-selected supply locations before landing", () => {
     const game = new Game(["a"], { indestructibleDensity: 0, destructibleDensity: 0 }, { speed: 0, timestepSeconds: 1 });
     const state = (game as unknown as { state: GameState }).state;
-    state.tick = 176; state.elapsedSeconds = 176;
+    state.tick = 178; state.elapsedSeconds = 178;
     expect(supplyMarkers(game.getSnapshot())).toEqual([]);
     game.step(); const preview = game.getSnapshot();
     expect(preview.supplyPreview?.scheduledAt).toBe(180);
     expect(preview.items.filter(i => i.supplyDroppedAt === 180)).toHaveLength(0);
     expect(supplyMarkers(preview)).toEqual(preview.supplyPreview!.tiles.map((tile, id) => ({ id, ...tileCenter(tile.x, tile.y, preview.map.tileSize) })));
     expect(supplyMarkers(preview).length).toBeGreaterThanOrEqual(4);
-    game.step(); game.step(); game.step(); const landed = game.getSnapshot();
+    game.step(); const landed = game.getSnapshot();
     expect(supplyMarkers(landed)).toEqual([]);
     expect(landed.items.filter(i => i.supplyDroppedAt === 180).length).toBeGreaterThanOrEqual(4);
   });

@@ -10,6 +10,20 @@ export function visibleBombs(snapshot: GameSnapshot) {
 export function visibleItems(snapshot: GameSnapshot) {
   return snapshot.items.map(item => ({ ...item, position: tileCenter(item.x, item.y, snapshot.map.tileSize) }));
 }
+/** Cycle stacked icons while keeping every displayed object at its tile centre. */
+export function displayItems(snapshot: GameSnapshot, now: number) {
+  const items = visibleItems(snapshot), groups = new Map<string, typeof items>();
+  for (const item of items) {
+    const key = `${item.x},${item.y}`, group = groups.get(key) ?? [];
+    group.push(item); groups.set(key, group);
+  }
+  return [...groups.values()].map(group => {
+    const item = group[Math.floor(now / 650) % group.length];
+    const overlapsBomb = snapshot.bombs.some(b => b.x === item.x && b.y === item.y);
+    const overlapsPlayer = snapshot.players.some(p => p.status !== "eliminated" && Math.floor(p.x / snapshot.map.tileSize) === item.x && Math.floor(p.y / snapshot.map.tileSize) === item.y);
+    return { item, count: group.length, crowded: group.length > 1 || overlapsBomb || overlapsPlayer };
+  });
+}
 /** Only server-selected upcoming landing tiles are displayed. */
 export function supplyMarkers(snapshot: GameSnapshot) {
   return (snapshot.supplyPreview?.tiles ?? []).map((tile, id) => ({ id, ...tileCenter(tile.x, tile.y, snapshot.map.tileSize) }));

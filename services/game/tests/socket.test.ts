@@ -35,16 +35,34 @@ describe("Socket.IO authoritative sessions", () => {
     const seenPlayer: GameState[] = [], seenSpectator: GameState[] = [];
     player.on("snapshot", s => seenPlayer.push(s)); spectator.on("snapshot", s => seenSpectator.push(s));
     const state = (session.game as unknown as { state: GameState }).state;
-    state.tick = 5309; state.elapsedSeconds = 5309 / 30;
+    state.tick = 5369; state.elapsedSeconds = 5369 / 30;
+    expect(session.game.getSnapshot().supplyPreview).toBeNull();
     steps(session, 1); await vi.waitFor(() => expect(seenPlayer.at(-1)?.supplyPreview?.scheduledAt).toBe(180));
     await vi.waitFor(() => expect(seenSpectator.at(-1)?.supplyPreview?.scheduledAt).toBe(180));
     const markers = supplyMarkers(seenPlayer.at(-1)!);
     expect(markers.length).toBeGreaterThanOrEqual(4); expect(supplyMarkers(seenSpectator.at(-1)!)).toEqual(markers);
     const late = await join(await client(), session, "spectator");
     expect(late.ok && supplyMarkers(late.value.snapshot)).toEqual(markers);
+    expect(seenPlayer.at(-1)!.supplyPreview!.tiles.every(tile => Object.keys(tile).sort().join(",") === "x,y")).toBe(true);
     expect(seenPlayer.at(-1)!.items.some(item => item.supplyDroppedAt === 180)).toBe(false);
-    steps(session, 90); expect(supplyMarkers(session.game.getSnapshot())).toEqual([]);
-    expect(session.game.getSnapshot().items.some(item => item.supplyDroppedAt === 180)).toBe(true);
+    steps(session, 30); expect(supplyMarkers(session.game.getSnapshot())).toEqual([]);
+    expect(session.game.getSnapshot().items.filter(item => item.supplyDroppedAt === 180).map(item => ({ x: item.x, y: item.y }))).toEqual(seenPlayer.at(-1)!.supplyPreview!.tiles);
+  });
+  it("gives bots the same public preview as human clients without hidden item types", () => {
+    const session = server.create("ffa", 4, 1);
+    const state = (session.game as unknown as { state: GameState }).state;
+    const bot = session.slots.find(slot => slot.bot)!.bot!;
+    const update = vi.spyOn(bot, "update");
+    state.tick = 5369; state.elapsedSeconds = 5369 / 30;
+    steps(session, 1);
+    expect(update.mock.calls[0][0].supplyPreview).toBeNull();
+    const publicSnapshot = session.game.getSnapshot();
+    expect(publicSnapshot.supplyPreview?.scheduledAt).toBe(180);
+    steps(session, 1);
+    const botSnapshot = update.mock.calls[1][0];
+    expect(botSnapshot).toEqual(publicSnapshot);
+    expect(botSnapshot.supplyPreview!.tiles.every(tile => Object.keys(tile).sort().join(",") === "x,y")).toBe(true);
+    expect(botSnapshot.items.some(item => item.supplyDroppedAt === 180)).toBe(false);
   });
   it("joins four FFA players and four two-team players with consistent initial state", async () => {
     for (const mode of ["ffa", "team"] as const) {
