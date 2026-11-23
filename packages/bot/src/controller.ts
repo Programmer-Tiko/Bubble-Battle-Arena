@@ -1,0 +1,125 @@
+import { DEFAULT_BOMB_CONFIG, DEFAULT_MOVEMENT_CONFIG } from "@bubble/engine";
+import type { GameSnapshot, MovementInput, PlayerState } from "@bubble/shared";
+import { HazardMap } from "./hazard.js";
+import { findPath, type Waypoint } from "./pathfinding.js";
+
+export type BotState = "ESCAPE" | "COLLECT_ITEM" | "APPROACH_OPPONENT" | "ATTACK" | "WAIT" | "TRAPPED" | "ELIMINATED";
+export interface BotCommand { input: MovementInput; placeBomb: boolean; state: BotState; reason: string }
+const idle = (): MovementInput => ({ up: false, down: false, left: false, right: false });
+const tile = (p: { x: number; y: number }, size: number) => ({ x: Math.floor(p.x / size), y: Math.floor(p.y / size) });
+const distance = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+
+/** A controller owns only plans, never game state. The host executes its commands. */
+export class BotController {
+  private path: Waypoint[] = [];
+  private planTick = 0;
+  private nextReplan = 0;
+  private signature = "";
+  private lastPosition?: { x: number; y: number };
+  private wasMoving = false;
+  private stuck = 0;
+  private state: BotState = "WAIT";
+  private reason = "Waiting";
+  constructor(readonly playerId: string, private readonly phase = 0) {}
+
+  private centeringDelay(snapshot: GameSnapshot, player: PlayerState): number {
+    const size = snapshot.map.tileSize, here = tile(player, size);
+    const speed = DEFAULT_MOVEMENT_CONFIG.speed * (player.slowSeconds > 0 ? 0.5 : 1 + 0.1 * player.boots);
+    return (Math.abs(player.x - (here.x + 0.5) * size) + Math.abs(player.y - (here.y + 0.5) * size)) / speed + 2 * DEFAULT_MOVEMENT_CONFIG.timestepSeconds;
+  }
+
+  private escape(snapshot: GameSnapshot, player: PlayerState, hazards: HazardMap, safeUntil: number): Waypoint[] {
+    const start = tile(player, snapshot.map.tileSize);
+    const result = findPath(snapshot, player, start, hazards, {
+      horizonSeconds: Math.min(5, safeUntil), maxNodes: 500, stepSeconds: 0.1, initialDelaySeconds: this.centeringDelay(snapshot, player),
+      goalTest: (x, y, time) => time > 0 && time + 0.3 < safeUntil && !hazards.isDangerousDuring(x, y, time, safeUntil),
+    });
+    return result.path;
+  }
+
+  /** Invoke once per fixed tick with a detached, authoritative snapshot. */
+  update(snapshot: GameSnapshot, canReplan = true): BotCommand {
+    const p = snapshot.players.find(player => player.id === this.playerId);
+    if (!p || snapshot.result || p.status !== "alive") {
+      this.path = []; this.lastPosition = undefined; this.wasMoving = false;
+      return { input: idle(), placeBomb: false, state: p?.status === "trapped" ? "TRAPPED" : "ELIMINATED", reason: "Cannot act" };
+    }
+    if (p.slide) { this.path = []; this.signature = ""; this.wasMoving = false; return { input: idle(), placeBomb: false, state: "WAIT", reason: "Forced slide" }; }
+    const size = snapshot.map.tileSize, here = tile(p, size), dt = DEFAULT_MOVEMENT_CONFIG.timestepSeconds;
+    const signature = snapshot.bombs.map(b => `${b.id}:${b.x},${b.y},${b.range}`).join("|") + ";" +
+      snapshot.explosions.map(e => `${e.id}:${e.x},${e.y}`).join("|") + ";" + snapshot.map.tiles.map(row => row.map(t => t.type[0]).join("")).join("");
+    const changed = signature !== this.signature;
+    if (this.lastPosition && this.wasMoving && this.path.length && Math.hypot(p.x - this.lastPosition.x, p.y - this.lastPosition.y) < 0.01) this.stuck++;
+    else this.stuck = 0;
+    this.lastPosition = { x: p.x, y: p.y };
+    const speed = DEFAULT_MOVEMENT_CONFIG.speed * (p.slowSeconds > 0 ? 0.5 : 1 + 0.1 * p.boots);
+    const tolerance = speed * dt * 0.51 + 0.05;
+    const centered = Math.abs(p.x - (here.x + 0.5) * size) <= tolerance && Math.abs(p.y - (here.y + 0.5) * size) <= tolerance;
+    // Replan at centres to avoid changing direction mid-tile, except on a changed hazard or obstruction.
+    const replan = changed || this.stuck > 12 || (!this.path.length && snapshot.tick >= this.nextReplan) || (centered && snapshot.tick >= this.nextReplan && this.state !== "ESCAPE");
+    let placeBomb = false;
+    // The session scheduler limits expensive searches to one bot per tick.
+    // Stop immediately on an unhandled world change until this bot's turn.
+    if (replan && !canReplan && (changed || this.stuck > 12 || !this.path.length)) {
+      this.wasMoving = false;
+      return { input: idle(), placeBomb: false, state: "WAIT", reason: "Waiting for a safe replan" };
+    }
+    if (replan && canReplan) {
+      this.signature = signature; this.stuck = 0; this.nextReplan = snapshot.tick + 18 + this.phase % 5;
+      const hazards = new HazardMap(snapshot), imminent = hazards.isDangerousDuring(here.x, here.y, 0, 3.8);
+      this.path = []; this.state = "WAIT"; this.reason = "No safe goal";
+      if (imminent) {
+        this.path = this.escape(snapshot, p, hazards, 4);
+        this.state = "ESCAPE"; this.reason = this.path.length ? "Bomb danger; moving to safety" : "No safe route found";
+      } else {
+        const hypothetical = structuredClone(snapshot);
+        const proposedId = Math.min(-1, ...hypothetical.bombs.map(b => b.id - 1));
+        hypothetical.bombs.push({ id: proposedId, ownerId: p.id, x: here.x, y: here.y, remainingSeconds: DEFAULT_BOMB_CONFIG.fuseSeconds, range: 1 + p.rangeUpgrades });
+        const predicted = new HazardMap(hypothetical), blastTime = predicted.detonationTimes.get(proposedId)!;
+        const others = snapshot.players.filter(other => other.id !== p.id && other.status !== "eliminated");
+        const enemyInBlast = others.some(other => other.teamId !== p.teamId && predicted.isDangerous(tile(other, size).x, tile(other, size).y, blastTime));
+        const allyInBlast = others.some(other => other.teamId === p.teamId && predicted.isDangerous(tile(other, size).x, tile(other, size).y, blastTime));
+        const nearWall = [[1,0],[-1,0],[0,1],[0,-1]].some(([dx,dy]) => snapshot.map.tiles[here.y + dy]?.[here.x + dx]?.type === "destructible");
+        const canBomb = centered && !snapshot.bombs.some(b => b.x === here.x && b.y === here.y) && snapshot.bombs.filter(b => b.ownerId === p.id).length < 1 + p.capacityUpgrades;
+        if (canBomb && !allyInBlast && (enemyInBlast || nearWall)) {
+          const route = this.escape(hypothetical, p, predicted, blastTime + DEFAULT_BOMB_CONFIG.explosionSeconds + 0.1);
+          if (route.length > 1 && route.at(-1)!.time + 0.3 < blastTime) {
+            this.path = route; this.state = "ESCAPE"; this.reason = "Bomb placed; retreating along safe route"; placeBomb = true;
+          }
+        }
+        if (!this.path.length) {
+          const items = snapshot.items.filter(i => i.kind === "pickup" && i.active && (i.type === "boots" || i.type === "range" || i.type === "capacity"));
+          const targets = items.sort((a, b) => distance(here, a) - distance(here, b) || a.y - b.y || a.x - b.x).slice(0, 3);
+          for (const target of targets) {
+            const route = findPath(snapshot, p, target, hazards, { maxNodes: 350, horizonSeconds: 5, initialDelaySeconds: this.centeringDelay(snapshot, p) }).path;
+            if (route.length > 1) { this.path = route; this.state = "COLLECT_ITEM"; this.reason = `Seeking ${target.type}`; break; }
+          }
+          if (!this.path.length) {
+            const enemy = others.filter(o => o.teamId !== p.teamId).sort((a, b) => distance(here, tile(a, size)) - distance(here, tile(b, size)) || a.id.localeCompare(b.id))[0];
+            if (enemy) {
+              const goal = tile(enemy, size), route = findPath(snapshot, p, goal, hazards, { maxNodes: 350, horizonSeconds: 5, initialDelaySeconds: this.centeringDelay(snapshot, p) }).path;
+              if (route.length > 1) { this.path = route; this.state = "APPROACH_OPPONENT"; this.reason = "Approaching opponent"; }
+            }
+          }
+        }
+      }
+      if (this.path.length) { this.planTick = snapshot.tick; }
+    }
+    // Recenter first, then follow cardinal tile centres; half-tick tolerance prevents oscillation.
+    while (this.path.length) {
+      const waypoint = this.path[0], x = (waypoint.x + 0.5) * size, y = (waypoint.y + 0.5) * size;
+      const dx = x - p.x, dy = y - p.y;
+      if (Math.abs(dx) <= tolerance && Math.abs(dy) <= tolerance) {
+        if ((snapshot.tick - this.planTick) * dt + 1e-9 < waypoint.time) break;
+        this.path.shift(); continue;
+      }
+      const input = idle();
+      if (Math.abs(dx) > tolerance) input[dx > 0 ? "right" : "left"] = true;
+      else if (Math.abs(dy) > tolerance) input[dy > 0 ? "down" : "up"] = true;
+      this.wasMoving = true;
+      return { input, placeBomb, state: this.state, reason: this.reason };
+    }
+    this.wasMoving = false;
+    return { input: idle(), placeBomb, state: this.state, reason: this.reason };
+  }
+}

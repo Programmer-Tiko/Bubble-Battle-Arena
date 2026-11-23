@@ -9,16 +9,18 @@ const colors: Record<TileType, number> = { floor: 0xcee9e3, indestructible: 0x34
 
 let adapter: GameAdapter = new LocalGameAdapter();
 let network: NetworkGameAdapter | undefined;
+if (!import.meta.env.DEV) document.querySelector<HTMLElement>("#dev-controls")!.hidden = true;
 const status = document.querySelector<HTMLElement>("#status")!;
 const notice = document.querySelector<HTMLElement>("#notice")!;
 const sessionField = document.querySelector<HTMLInputElement>("#session")!;
 const modeField = document.querySelector<HTMLSelectElement>("#mode")!;
 const countField = document.querySelector<HTMLSelectElement>("#players")!;
+const botsField = document.querySelector<HTMLSelectElement>("#bots")!;
 const roleField = document.querySelector<HTMLSelectElement>("#role")!;
 const server = import.meta.env.VITE_GAME_SERVER ?? "http://127.0.0.1:3001";
 document.querySelector<HTMLButtonElement>("#create-session")!.onclick = async () => {
   try {
-    const response = await fetch(`${server}/dev/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: modeField.value, players: Number(countField.value) }) });
+    const response = await fetch(`${server}/dev/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: modeField.value, players: Number(countField.value), bots: Number(botsField.value) }) });
     const body = await response.json(); if (!response.ok) throw new Error(body.error);
     sessionField.value = body.sessionId; notice.textContent = "Session created. Share its ID, then join.";
   } catch (error) { notice.textContent = `Create failed: ${String(error)}`; }

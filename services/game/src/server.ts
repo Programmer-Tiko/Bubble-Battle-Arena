@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { Server } from "socket.io";
 import { DEFAULT_MOVEMENT_CONFIG, Game } from "@bubble/engine";
+import { BotController } from "@bubble/bot";
 import type { ClientEvents, ServerEvents, MovementInput, SessionMode, Reply, GameSnapshot } from "@bubble/shared";
 
 const idle: MovementInput = { up: false, down: false, left: false, right: false };
@@ -15,7 +16,7 @@ const loopback = (address: string | undefined) => address === "127.0.0.1" || add
 const localHost = (host: string | undefined) => !!host && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
 
 export interface ServerOptions { snapshotEveryTicks?: number; staleInputMs?: number; autoTick?: boolean; now?: () => number; environment?: string; maxSessions?: number; maxConnections?: number; maxMembersPerSession?: number; emptySessionMs?: number; completedSessionMs?: number; cleanupIntervalMs?: number; joinTimeoutMs?: number }
-interface Slot { id: string; claimed: boolean; socketId?: string; lastInputAt: number }
+interface Slot { id: string; claimed: boolean; socketId?: string; lastInputAt: number; bot?: BotController }
 export interface Session { id: string; game: Game; slots: Slot[]; timer?: ReturnType<typeof setInterval>; completed: boolean; completedAt?: number; emptySince: number; members: Set<string>; snapshot: GameSnapshot }
 
 /** Development launcher only. Replace the join boundary with verified identity/room authorization for production. */
@@ -39,10 +40,12 @@ export function createGameServer(options: ServerOptions = {}) {
   const http = createServer(app);
   const io = new Server<ClientEvents, ServerEvents>(http, { transports: ["websocket"], maxHttpBufferSize: 1024, perMessageDeflate: { threshold: 1024 }, cors: { origin: (origin, cb) => cb(null, localOrigin(origin)) }, allowRequest: (req, cb) => cb(null, loopback(req.socket.remoteAddress) && localHost(req.headers.host) && localOrigin(req.headers.origin) && io.engine.clientsCount < maxConnections) });
   const sessions = new Map<string, Session>();
-  const create = (mode: SessionMode, count: number): Session => {
+  const create = (mode: SessionMode, count: number, botCount = 0): Session => {
     if ((mode !== "ffa" && mode !== "team") || !Number.isInteger(count) || count < 4 || count > 8 || (mode === "team" && count % 2)) throw new RangeError("Invalid roster");
+    if (!Number.isInteger(botCount) || botCount < 0 || botCount > count) throw new RangeError("Invalid bot count");
     if (sessions.size >= maxSessions) throw new Error("Session capacity reached");
     const slots: Slot[] = Array.from({ length: count }, () => ({ id: randomUUID(), claimed: false, lastInputAt: 0 }));
+    slots.forEach((slot, i) => { if (i >= count - botCount) { slot.claimed = true; slot.bot = new BotController(slot.id, i); } });
     const teams = Object.fromEntries(slots.map((slot, i) => [slot.id, `team-${Math.floor(i / 2) + 1}`]));
     const game = new Game(slots.map(s => s.id), {}, {}, {}, { mode, teams });
     const session: Session = { id: randomUUID(), game, slots, completed: false, emptySince: now(), members: new Set(), snapshot: game.getSnapshot() };
@@ -62,6 +65,14 @@ export function createGameServer(options: ServerOptions = {}) {
   const tick = (session: Session) => {
     if (session.completed) return;
     for (const slot of session.slots) if (slot.socketId && now() - slot.lastInputAt > staleMs) session.game.setInput(slot.id, idle);
+    // Re-read after each action so later bots see bombs placed earlier in this tick.
+    const bots = session.slots.filter(slot => slot.bot);
+    for (let i = 0; i < bots.length; i++) {
+      const slot = bots[i];
+      const decision = slot.bot!.update(session.game.getSnapshot(), session.snapshot.tick % bots.length === i);
+      session.game.setInput(slot.id, decision.input);
+      if (decision.placeBomb) session.game.placeBomb(slot.id);
+    }
     session.game.step();
     const snap = session.snapshot = session.game.getSnapshot();
     if (snap.tick % snapshotEvery === 0 || snap.result) io.to(session.id).emit("snapshot", snap);
@@ -80,9 +91,9 @@ export function createGameServer(options: ServerOptions = {}) {
   cleanupTimer.unref();
   app.post("/dev/sessions", (req, res) => {
     const value: unknown = req.body;
-    if (!isRecord(value) || !exact(value, ["mode", "players"]) || (value.mode !== "ffa" && value.mode !== "team") || typeof value.players !== "number") { res.status(400).json({ error: "Invalid session request" }); return; }
+    if (!isRecord(value) || !(exact(value, ["mode", "players"]) || exact(value, ["mode", "players", "bots"])) || (value.mode !== "ffa" && value.mode !== "team") || typeof value.players !== "number" || (value.bots !== undefined && typeof value.bots !== "number")) { res.status(400).json({ error: "Invalid session request" }); return; }
     if (sessions.size >= maxSessions) { res.status(503).json({ error: "Session capacity reached" }); return; }
-    try { const session = create(value.mode, value.players); res.status(201).json({ sessionId: session.id }); }
+    try { const session = create(value.mode, value.players, value.bots as number | undefined); res.status(201).json({ sessionId: session.id }); }
     catch { res.status(400).json({ error: "Invalid roster" }); }
   });
   io.on("connection", socket => {

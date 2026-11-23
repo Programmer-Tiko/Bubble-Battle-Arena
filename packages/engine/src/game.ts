@@ -2,6 +2,7 @@ import type { BombState, GameSnapshot, GameState, MovementInput, ItemType, TrapT
 import { DEFAULT_MAP_CONFIG, generateMap, type MapConfig } from "./map.js";
 import { seededRandom } from "./random.js";
 import { DEFAULT_MOVEMENT_CONFIG, movePlayer, type MovementConfig } from "./movement.js";
+import { visitBlast } from "./blast.js";
 
 const IDLE: MovementInput = { up: false, down: false, left: false, right: false };
 /** Provisional values until the team agrees on limits and visual duration. */
@@ -173,10 +174,7 @@ export class Game {
         if (tile.type === "destructible") { tile.type = "floor"; return !this.bombConfig.stopAtDestructible; }
         return true;
       };
-      blast(bomb.x, bomb.y);
-      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-        for (let distance = 1; distance <= bomb.range; distance++) if (!blast(bomb.x + dx * distance, bomb.y + dy * distance)) break;
-      }
+      visitBlast(bomb.x, bomb.y, bomb.range, blast);
     }
   }
   /** Advance exactly one configured fixed timestep. */
