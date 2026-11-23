@@ -3,7 +3,7 @@ import type { GameSnapshot, MovementInput, PlayerState } from "@bubble/shared";
 import { HazardMap } from "./hazard.js";
 import { findPath, type SearchOptions, type Waypoint } from "./pathfinding.js";
 
-export type BotState = "ESCAPE" | "COLLECT_ITEM" | "APPROACH_OPPONENT" | "ATTACK" | "WAIT" | "TRAPPED" | "ELIMINATED";
+export type BotState = "ESCAPE" | "COLLECT_ITEM" | "APPROACH_OPPONENT" | "REPOSITION" | "ATTACK" | "WAIT" | "TRAPPED" | "ELIMINATED";
 export type BotDifficulty = "easy" | "normal" | "hard";
 const levels = {
   easy: { interval: 36, horizon: 3.6, threat: 3.4, escapeUntil: 3.6, goals: 1, nodes: 220, escapeNodes: 350 },
@@ -26,6 +26,8 @@ export class BotController {
   private stuck = 0;
   private state: BotState = "WAIT";
   private reason = "Waiting";
+  private visits = new Map<string, number>();
+  private lastTile = "";
   private counters = { searches: 0, expanded: 0, exhausted: 0 };
   constructor(readonly playerId: string, private readonly phase = 0, readonly difficulty: BotDifficulty = "normal") {
     if (!Object.hasOwn(levels, difficulty)) throw new RangeError("Invalid bot difficulty");
@@ -73,6 +75,8 @@ export class BotController {
     }
     if (p.slide) { this.path = []; this.signature = ""; this.wasMoving = false; return { input: idle(), placeBomb: false, state: "WAIT", reason: "Forced slide" }; }
     const size = snapshot.map.tileSize, here = tile(p, size), dt = DEFAULT_MOVEMENT_CONFIG.timestepSeconds;
+    const hereKey = `${here.x},${here.y}`;
+    if (hereKey !== this.lastTile) { this.lastTile = hereKey; this.visits.set(hereKey, snapshot.tick); }
     const signature = snapshot.bombs.map(b => `${b.id}:${b.x},${b.y},${b.range}`).join("|") + ";" +
       snapshot.explosions.map(e => `${e.id}:${e.x},${e.y}`).join("|") + ";" + snapshot.map.tiles.map(row => row.map(t => t.type[0]).join("")).join("");
     const changed = signature !== this.signature;
@@ -122,17 +126,39 @@ export class BotController {
           }
         }
         if (!this.path.length) {
+          let partial: { path: Waypoint[]; state: BotState; reason: string } | undefined;
+          const usefulPartial = (path: Waypoint[]) => {
+            const end = path.at(-1);
+            if (!end || path.length < 2) return false;
+            const visited = this.visits.get(`${end.x},${end.y}`);
+            return visited === undefined || snapshot.tick - visited > 180;
+          };
           const items = snapshot.items.filter(i => i.kind === "pickup" && i.active && (i.type === "boots" || i.type === "range" || i.type === "capacity"));
           const targets = items.sort((a, b) => distance(here, a) - distance(here, b) || a.y - b.y || a.x - b.x).slice(0, config.goals);
           for (const target of targets) {
-            const route = this.search(snapshot, p, target, hazards, { maxNodes: config.nodes, horizonSeconds: config.horizon, initialDelaySeconds: this.centeringDelay(snapshot, p) }).path;
-            if (route.length > 1) { this.path = route; this.state = "COLLECT_ITEM"; this.reason = `Seeking ${target.type}`; break; }
+            const result = this.search(snapshot, p, target, hazards, { maxNodes: config.nodes, horizonSeconds: config.horizon, initialDelaySeconds: this.centeringDelay(snapshot, p), allowPartial: true });
+            if (result.path.length > 1 && !result.partial) { this.path = result.path; this.state = "COLLECT_ITEM"; this.reason = `Seeking ${target.type}`; break; }
+            if (result.partial && usefulPartial(result.path) && !partial) partial = { path: result.path, state: "COLLECT_ITEM", reason: `Approaching ${target.type} via an intermediate tile` };
           }
           if (!this.path.length) {
-            const enemy = others.filter(o => o.teamId !== p.teamId).sort((a, b) => distance(here, tile(a, size)) - distance(here, tile(b, size)) || a.id.localeCompare(b.id))[0];
-            if (enemy) {
-              const goal = tile(enemy, size), route = this.search(snapshot, p, goal, hazards, { maxNodes: config.nodes, horizonSeconds: config.horizon, initialDelaySeconds: this.centeringDelay(snapshot, p) }).path;
-              if (route.length > 1) { this.path = route; this.state = "APPROACH_OPPONENT"; this.reason = "Approaching opponent"; }
+            const enemies = others.filter(o => o.teamId !== p.teamId).sort((a, b) => distance(here, tile(a, size)) - distance(here, tile(b, size)) || a.id.localeCompare(b.id)).slice(0, 2);
+            for (const enemy of enemies) {
+              const goal = tile(enemy, size), result = this.search(snapshot, p, goal, hazards, { maxNodes: config.nodes, horizonSeconds: config.horizon, initialDelaySeconds: this.centeringDelay(snapshot, p), allowPartial: true });
+              if (result.path.length > 1 && !result.partial) { this.path = result.path; this.state = "APPROACH_OPPONENT"; this.reason = "Approaching opponent"; break; }
+              if (result.partial && usefulPartial(result.path) && !partial) partial = { path: result.path, state: "APPROACH_OPPONENT", reason: "Approaching opponent via an intermediate tile" };
+            }
+          }
+          if (!this.path.length && partial) { this.path = partial.path; this.state = partial.state; this.reason = partial.reason; }
+          if (!this.path.length) {
+            // A local, time-checked exploration step prevents an unreachable goal
+            // from causing endless idle. Prefer the least recently visited tile.
+            const neighbors = [[1,0],[-1,0],[0,1],[0,-1]].map(([dx,dy]) => ({ x: here.x + dx, y: here.y + dy }))
+              .filter(q => snapshot.map.tiles[q.y]?.[q.x]?.type === "floor")
+              .sort((a, b) => (this.visits.get(`${a.x},${a.y}`) ?? -1) - (this.visits.get(`${b.x},${b.y}`) ?? -1) || a.y - b.y || a.x - b.x);
+            for (const goal of neighbors) {
+              const route = this.search(snapshot, p, goal, hazards, { maxNodes: 80, horizonSeconds: 2, initialDelaySeconds: this.centeringDelay(snapshot, p),
+                goalTest: (x, y, time) => x === goal.x && y === goal.y && !hazards.isDangerousDuring(x, y, time, time + 1) }).path;
+              if (route.length > 1) { this.path = route; this.state = "REPOSITION"; this.reason = "Exploring a safe neighboring tile"; break; }
             }
           }
         }
