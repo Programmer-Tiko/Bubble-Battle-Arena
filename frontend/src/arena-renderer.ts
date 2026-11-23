@@ -91,9 +91,13 @@ export class ArenaRenderer {
       const pulse = 1 + .035 * Math.sin(now / 350 + bomb.id * 1.7);
       this.image("bombs", "bomb", bomb.x, bomb.y, size * .87 * pulse, 6);
     }
-    if (snapshot.balloon) {
-      const progress = Phaser.Math.Clamp((snapshot.elapsedSeconds - snapshot.balloon.startedAt) / snapshot.balloon.durationSeconds, 0, 1);
-      const x = size * .7 + progress * (map.width * size + size * .3);
+    if (snapshot.supplyPreview || snapshot.balloon) {
+      const preview = snapshot.supplyPreview;
+      const progress = preview
+        ? Phaser.Math.Clamp((snapshot.elapsedSeconds - preview.announcedAt) / Math.max(.001, preview.scheduledAt - preview.announcedAt), 0, 1)
+        : Phaser.Math.Clamp((snapshot.elapsedSeconds - snapshot.balloon!.startedAt) / snapshot.balloon!.durationSeconds, 0, 1);
+      const destination = preview && markers.length ? markers.reduce((sum, marker) => sum + marker.x, 0) / markers.length : map.width * size + size;
+      const x = size * .7 + progress * (destination - size * .7);
       this.rings.lineStyle(1, 0xffd68c, .3);
       for (const marker of markers) this.rings.lineBetween(x, size * 1.35, marker.x, marker.y);
       this.image("balloon", "balloon", x, size * 1.15, size * 1.45, 18).setDisplaySize(size * 1.45, size * 1.8);

@@ -13,7 +13,8 @@ export interface BombState { id: number; ownerId: string; x: number; y: number; 
 export interface ExplosionState { id: number; x: number; y: number; remainingSeconds: number }
 export interface BalloonState { startedAt: number; durationSeconds: number }
 export type MatchResult = { kind: "winner"; teamId: string } | { kind: "draw" };
-export interface GameState { tick: number; elapsedSeconds: number; result: MatchResult | null; map: ArenaMap; players: PlayerState[]; bombs: BombState[]; explosions: ExplosionState[]; items: GroundItem[]; balloon: BalloonState | null }
+export interface SupplyPreview { announcedAt: number; scheduledAt: number; tiles: { x: number; y: number }[] }
+export interface GameState { tick: number; elapsedSeconds: number; result: MatchResult | null; map: ArenaMap; players: PlayerState[]; bombs: BombState[]; explosions: ExplosionState[]; items: GroundItem[]; balloon: BalloonState | null; supplyPreview: SupplyPreview | null }
 export interface GameSnapshot extends GameState {}
 
 /** Development protocol: clients submit intent only, never gameplay state or identity. */

@@ -24,16 +24,19 @@ describe("authoritative visual projection", () => {
     expect(visibleBombs(multiplayerSnapshot)).toEqual(visibleBombs(snapshot));
     expect(visibleItems(multiplayerSnapshot)).toEqual(visibleItems(snapshot));
   });
-  it("shows only recent server-selected supply drops, aligned to their tiles", () => {
+  it("shows server-selected supply locations before landing", () => {
     const game = new Game(["a"], { indestructibleDensity: 0, destructibleDensity: 0 }, { speed: 0, timestepSeconds: 1 });
     const state = (game as unknown as { state: GameState }).state;
-    state.tick = 179; state.elapsedSeconds = 179;
+    state.tick = 176; state.elapsedSeconds = 176;
     expect(supplyMarkers(game.getSnapshot())).toEqual([]);
-    game.step(); const snapshot = game.getSnapshot(), drops = snapshot.items.filter(i => i.supplyDroppedAt === 180);
-    expect(drops.length).toBeGreaterThanOrEqual(4);
-    expect(supplyMarkers(snapshot)).toEqual(drops.map(i => ({ id: i.id, ...tileCenter(i.x, i.y, snapshot.map.tileSize) })));
-    expect(supplyMarkers(structuredClone(snapshot))).toEqual(supplyMarkers(snapshot));
-    game.step(); game.step(); game.step(); expect(supplyMarkers(game.getSnapshot())).toEqual([]);
+    game.step(); const preview = game.getSnapshot();
+    expect(preview.supplyPreview?.scheduledAt).toBe(180);
+    expect(preview.items.filter(i => i.supplyDroppedAt === 180)).toHaveLength(0);
+    expect(supplyMarkers(preview)).toEqual(preview.supplyPreview!.tiles.map((tile, id) => ({ id, ...tileCenter(tile.x, tile.y, preview.map.tileSize) })));
+    expect(supplyMarkers(preview).length).toBeGreaterThanOrEqual(4);
+    game.step(); game.step(); game.step(); const landed = game.getSnapshot();
+    expect(supplyMarkers(landed)).toEqual([]);
+    expect(landed.items.filter(i => i.supplyDroppedAt === 180).length).toBeGreaterThanOrEqual(4);
   });
   it("projects collected passive upgrades into stats and only consumables into slots", () => {
     const game = new Game(["a"], { indestructibleDensity: 0, destructibleDensity: 0 });

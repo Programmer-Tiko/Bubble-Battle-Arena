@@ -13,6 +13,26 @@ function steps(game: Game, count: number) { for (let i = 0; i < count; i++) game
 const supply = (state: GameState) => state.items.filter(item => item.supplyDroppedAt !== undefined);
 
 describe("balloon supply", () => {
+  it("announces deterministic locations before landing and rechecks occupied tiles", () => {
+    const a = fixture(33), b = fixture(33);
+    steps(a.game, 176); steps(b.game, 176);
+    expect(a.game.getSnapshot().supplyPreview).toBeNull();
+    a.game.step(); b.game.step();
+    const preview = a.game.getSnapshot().supplyPreview!;
+    expect(preview).toEqual(b.game.getSnapshot().supplyPreview);
+    expect(preview).toMatchObject({ announcedAt: 177, scheduledAt: 180 });
+    expect(preview.tiles.length).toBeGreaterThanOrEqual(4);
+    expect(supply(a.game.getSnapshot())).toHaveLength(0);
+    const blocked = preview.tiles[0];
+    a.state.bombs.push({ id: 999, ownerId: "a", ...blocked, range: 1, remainingSeconds: 1000 });
+    steps(a.game, 3); const landed = a.game.getSnapshot();
+    expect(landed.supplyPreview).toBeNull();
+    const drops = supply(landed);
+    expect(drops).toHaveLength(preview.tiles.length);
+    expect(drops.some(item => item.x === blocked.x && item.y === blocked.y)).toBe(false);
+    for (const tile of preview.tiles.slice(1)) expect(drops.some(item => item.x === tile.x && item.y === tile.y)).toBe(true);
+    expect(new Set(drops.map(item => item.type)).size).toBeGreaterThanOrEqual(2);
+  });
   it("visits exactly at 3, 6 and 9 minutes of simulation time", () => {
     const { game } = fixture(1, true);
     steps(game, 179); expect(game.getSnapshot().balloon).toBeNull();
@@ -28,7 +48,7 @@ describe("balloon supply", () => {
     const { game, state } = fixture(2, true); steps(game, 179);
     for (const player of state.players.slice(1)) { player.status = "trapped"; player.trappedSeconds = 0.5; }
     game.step(); expect(game.getSnapshot().result).not.toBeNull();
-    expect(game.getSnapshot().balloon).toBeNull(); expect(supply(game.getSnapshot())).toHaveLength(0);
+    expect(game.getSnapshot().balloon).toBeNull(); expect(game.getSnapshot().supplyPreview).toBeNull(); expect(supply(game.getSnapshot())).toHaveLength(0);
     steps(game, 400); expect(game.getSnapshot().balloon).toBeNull();
   });
   it("selects 4–6 diverse categories on distinct free floor tiles across seeds", () => {

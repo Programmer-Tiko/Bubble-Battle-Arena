@@ -24,6 +24,7 @@ export class Game {
   private nextItemId = 0;
   private supplyRandom: () => number;
   private nextSupplyIndex = 0;
+  private pendingSupply: { x: number; y: number; type: ItemType }[] | null = null;
   private hitExplosions = new Map<number, Set<string>>();
   private match?: MatchConfig;
   constructor(playerIds: string[], mapConfig: Partial<MapConfig> = {}, movementConfig: Partial<MovementConfig> = {}, bombConfig: Partial<BombConfig> = {}, match?: MatchConfig, itemConfig: Partial<ItemConfig> = {}) {
@@ -58,7 +59,7 @@ export class Game {
         !Number.isInteger(b.initialCapacity) || b.initialCapacity < 1 || !Number.isInteger(b.maxCapacity) || b.maxCapacity < b.initialCapacity ||
         !Number.isInteger(b.maxRange) || b.maxRange < 1 || typeof b.stopAtDestructible !== "boolean" || !["ignore", "reset", "eliminate"].includes(b.repeatedHit)) throw new RangeError("Invalid bomb configuration");
     for (const id of playerIds) this.upgrades.set(id, { capacity: b.initialCapacity, range: 1 });
-    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [], balloon: null };
+    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [], balloon: null, supplyPreview: null };
     // Provisional initial distribution: four boots and a configurable supply of other items.
     const available = map.tiles.flat().filter(t => t.type === "floor" && !spawns.some(p => Math.abs(p.x - t.x) + Math.abs(p.y - t.y) <= 1));
     for (const tile of map.tiles.flat()) if (tile.type === "floor" && !available.includes(tile)) available.push(tile);
@@ -75,31 +76,63 @@ export class Game {
     this.state.items.push({ id: this.nextItemId++, type, x, y, kind, ownerId, active: kind !== "trap" });
   }
   /** A bounded selection from currently free floor tiles. Fewer than four means no drop. */
-  private spawnSupply(startedAt: number): void {
-    this.state.balloon = { startedAt, durationSeconds: 20 };
+  private freeSupplyTiles() {
     const size = this.state.map.tileSize;
-    const tiles = this.state.map.tiles.flat().filter(tile => tile.type === "floor" &&
+    return this.state.map.tiles.flat().filter(tile => tile.type === "floor" &&
       !this.state.items.some(item => item.x === tile.x && item.y === tile.y) &&
       !this.state.bombs.some(bomb => bomb.x === tile.x && bomb.y === tile.y) &&
       !this.state.players.some(player => player.status !== "eliminated" && Math.floor(player.x / size) === tile.x && Math.floor(player.y / size) === tile.y));
-    if (tiles.length < 4) return;
+  }
+  private selectSupply() {
+    const tiles = this.freeSupplyTiles();
+    if (tiles.length < 4) return [];
     const count = Math.min(4 + Math.floor(this.supplyRandom() * 3), tiles.length);
     const types: ItemType[] = ["boots", "capacity", "range", "banana", "slowdown"];
-    const chosen: ItemType[] = [];
+    const chosen: { x: number; y: number; type: ItemType }[] = [];
     for (let i = 0; i < count; i++) {
       const j = i + Math.floor(this.supplyRandom() * (tiles.length - i));
       [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
-      chosen.push(types[Math.floor(this.supplyRandom() * types.length)]);
+      chosen.push({ x: tiles[i].x, y: tiles[i].y, type: types[Math.floor(this.supplyRandom() * types.length)] });
     }
-    // Guarantee diversity without retry loops or biasing every event to a fixed category.
-    if (chosen.every(type => type === chosen[0])) {
-      const first = types.indexOf(chosen[0]);
-      chosen[count - 1] = types[(first + 1 + Math.floor(this.supplyRandom() * (types.length - 1))) % types.length];
+    if (chosen.every(item => item.type === chosen[0].type)) {
+      const first = types.indexOf(chosen[0].type);
+      chosen[count - 1].type = types[(first + 1 + Math.floor(this.supplyRandom() * (types.length - 1))) % types.length];
     }
-    for (let i = 0; i < count; i++) {
-      this.addItem(chosen[i], tiles[i].x, tiles[i].y, "pickup");
-      this.state.items[this.state.items.length - 1].supplyDroppedAt = startedAt;
+    return chosen;
+  }
+  private announceSupply(scheduledAt: number): void {
+    this.pendingSupply = this.selectSupply();
+    this.state.supplyPreview = { announcedAt: this.state.elapsedSeconds, scheduledAt, tiles: this.pendingSupply.map(({ x, y }) => ({ x, y })) };
+  }
+  private spawnSupply(startedAt: number): void {
+    this.state.balloon = { startedAt, durationSeconds: 20 };
+    const free = this.freeSupplyTiles();
+    if (free.length >= 4) {
+      const plan = this.pendingSupply?.length ? this.pendingSupply : this.selectSupply();
+      const key = (tile: { x: number; y: number }) => `${tile.x},${tile.y}`;
+      const available = new Set(free.map(key));
+      const retained = plan.filter(tile => available.has(key(tile))).slice(0, free.length);
+      const retainedKeys = new Set(retained.map(key));
+      const replacements = free.filter(tile => !retainedKeys.has(key(tile)));
+      const final = [...retained];
+      for (const tile of plan.filter(tile => !available.has(key(tile)))) {
+        if (final.length >= Math.min(plan.length, free.length)) break;
+        const index = Math.floor(this.supplyRandom() * replacements.length);
+        const replacement = replacements.splice(index, 1)[0];
+        final.push({ x: replacement.x, y: replacement.y, type: tile.type });
+      }
+      if (final.length && final.every(item => item.type === final[0].type)) {
+        const types: ItemType[] = ["boots", "capacity", "range", "banana", "slowdown"];
+        const first = types.indexOf(final[0].type);
+        final[final.length - 1] = { ...final[final.length - 1], type: types[(first + 1 + Math.floor(this.supplyRandom() * (types.length - 1))) % types.length] };
+      }
+      for (const item of final) {
+        this.addItem(item.type, item.x, item.y, "pickup");
+        this.state.items[this.state.items.length - 1].supplyDroppedAt = startedAt;
+      }
     }
+    this.pendingSupply = null;
+    this.state.supplyPreview = null;
   }
   /** Place one inventory charge on the current tile. Slots are zero-based. */
   useItem(playerId: string, slot: number): boolean {
@@ -271,8 +304,12 @@ export class Game {
     }
     if (this.state.balloon && this.state.elapsedSeconds >= this.state.balloon.startedAt + this.state.balloon.durationSeconds) this.state.balloon = null;
     const schedule = [180, 360, 540];
-    while (!this.state.result && this.nextSupplyIndex < schedule.length && this.state.elapsedSeconds + 1e-9 >= schedule[this.nextSupplyIndex]) {
-      this.spawnSupply(schedule[this.nextSupplyIndex++]);
+    if (this.state.result) { this.pendingSupply = null; this.state.supplyPreview = null; }
+    while (!this.state.result && this.nextSupplyIndex < schedule.length) {
+      const scheduledAt = schedule[this.nextSupplyIndex];
+      if (!this.state.supplyPreview && this.state.elapsedSeconds + 1e-9 >= scheduledAt - 3) this.announceSupply(scheduledAt);
+      if (this.state.elapsedSeconds + 1e-9 < scheduledAt) break;
+      this.spawnSupply(scheduledAt); this.nextSupplyIndex++;
     }
   }
   /** Return a detached public copy so consumers cannot mutate the simulation. */

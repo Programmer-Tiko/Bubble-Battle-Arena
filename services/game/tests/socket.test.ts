@@ -35,14 +35,16 @@ describe("Socket.IO authoritative sessions", () => {
     const seenPlayer: GameState[] = [], seenSpectator: GameState[] = [];
     player.on("snapshot", s => seenPlayer.push(s)); spectator.on("snapshot", s => seenSpectator.push(s));
     const state = (session.game as unknown as { state: GameState }).state;
-    state.tick = 5399; state.elapsedSeconds = 5399 / 30;
-    steps(session, 1); await vi.waitFor(() => expect(seenPlayer.at(-1)?.balloon?.startedAt).toBe(180));
-    await vi.waitFor(() => expect(seenSpectator.at(-1)?.balloon?.startedAt).toBe(180));
+    state.tick = 5309; state.elapsedSeconds = 5309 / 30;
+    steps(session, 1); await vi.waitFor(() => expect(seenPlayer.at(-1)?.supplyPreview?.scheduledAt).toBe(180));
+    await vi.waitFor(() => expect(seenSpectator.at(-1)?.supplyPreview?.scheduledAt).toBe(180));
     const markers = supplyMarkers(seenPlayer.at(-1)!);
     expect(markers.length).toBeGreaterThanOrEqual(4); expect(supplyMarkers(seenSpectator.at(-1)!)).toEqual(markers);
     const late = await join(await client(), session, "spectator");
     expect(late.ok && supplyMarkers(late.value.snapshot)).toEqual(markers);
+    expect(seenPlayer.at(-1)!.items.some(item => item.supplyDroppedAt === 180)).toBe(false);
     steps(session, 90); expect(supplyMarkers(session.game.getSnapshot())).toEqual([]);
+    expect(session.game.getSnapshot().items.some(item => item.supplyDroppedAt === 180)).toBe(true);
   });
   it("joins four FFA players and four two-team players with consistent initial state", async () => {
     for (const mode of ["ffa", "team"] as const) {
