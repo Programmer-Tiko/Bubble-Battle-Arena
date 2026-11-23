@@ -11,12 +11,19 @@
       <p>Local prototype - Move with WASD or arrow keys - Space places a bomb - 1?5 place inventory traps</p>
       <p>Items: green boots, purple bomb capacity, orange blast range, yellow banana, pink slowdown. Outlined items are traps or hazards.</p>
       <section aria-label="Local multiplayer development controls">
+        <div id="dev-controls">
         <label>Mode <select id="mode"><option value="ffa">FFA</option><option value="team">Team Battle</option></select></label>
         <label>Players <select id="players"><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
+        <label>Bots <select id="bots"><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
+        <label>Difficulty <select id="difficulty"><option value="easy">Easy</option><option value="normal" selected>Normal</option><option value="hard">Hard</option></select></label>
+        <label><input id="bot-debug" type="checkbox" /> Bot debug</label>
+        <label>Bot <select id="debug-bot"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option><option value="4">5</option><option value="5">6</option><option value="6">7</option><option value="7">8</option></select></label>
         <button id="create-session">Create test session</button>
         <label>Session ID <input id="session" size="38" /></label>
         <label>Join as <select id="role"><option value="player">Player</option><option value="spectator">Spectator</option></select></label>
         <button id="join-session">Join</button><button id="local-mode">Local mode</button>
+        <p id="debug-status" role="status"></p>
+        </div>
         <p id="notice" role="status"></p>
         <p id="status">Local mode</p>
       </section>

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@bubble/bot": "0.1.0",
     "@bubble/engine": "0.1.0",
     "@bubble/shared": "0.1.0",
     "express": "^5.1.0",
