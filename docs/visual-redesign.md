@@ -16,3 +16,7 @@ Screenshots below include a local baseline, the redesigned local arena, a placed
 - [Splash and trapped state](screenshots/visual-effects.png)
 - [Authoritative supply landing markers](screenshots/visual-supply.png)
 - [Permanent stats and active-item inventory](screenshots/visual-loadout.png)
+
+## Final QA fixtures
+
+The [eight-player fixture](screenshots/qa-eight-player.png) places eight players and representative items, a bomb, a splash, and a trapped character in a controlled server state. It is not an eight-human playtest. The [bomb overlap fixture](screenshots/qa-bomb-overlap.png) shows a bomb and trap on a player tile; the bomb remains centered and is drawn above the player, with varying opacity to expose the co-located trap. The [supply preview](screenshots/qa-supply-preview.png) was captured from a two-client session advanced to 179 seconds; both clients received matching coordinates and observed the subsequent landing. The [loadout fixture](screenshots/qa-loadout.png) collected all five item types through the engine and used a banana charge.

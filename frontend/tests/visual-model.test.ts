@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { Game } from "@bubble/engine";
 import type { GameState } from "@bubble/shared";
-import { characterStats, displayItems, supplyMarkers, tileCenter, visibleBombs, visibleItems } from "../src/visual-model";
+import { bombAppearance, characterStats, displayItems, supplyMarkers, tileCenter, visibleBombs, visibleItems } from "../src/visual-model";
 
 describe("authoritative visual projection", () => {
+  it("keeps a bomb visible above a player and cycles a co-located trap into view", () => {
+    const game = new Game(["a"]), state = (game as unknown as { state: GameState }).state;
+    const player = state.players[0], size = state.map.tileSize, x = Math.floor(player.x / size), y = Math.floor(player.y / size);
+    state.items = [{ id: 100, type: "banana", kind: "trap", active: true, x, y }];
+    game.placeBomb("a"); const snapshot = game.getSnapshot(), bomb = visibleBombs(snapshot)[0];
+    expect(bomb).toMatchObject(tileCenter(x, y, size));
+    expect(bombAppearance(snapshot, bomb, 0)).toMatchObject({ depth: 14, scale: .7 });
+    expect(bombAppearance(snapshot, bomb, Math.PI * 225).alpha).toBeGreaterThan(bombAppearance(snapshot, bomb, Math.PI * 675).alpha);
+    snapshot.players[0].x += 2 * size;
+    expect(bombAppearance(snapshot, bomb, 0)).toEqual({ depth: 6, scale: .87, alpha: 1 });
+  });
   it("cycles overlapping item icons at the tile centre while retaining bomb and player visibility", () => {
     const game = new Game(["a"]), state = (game as unknown as { state: GameState }).state;
     const p = state.players[0], x = Math.floor(p.x / state.map.tileSize), y = Math.floor(p.y / state.map.tileSize);

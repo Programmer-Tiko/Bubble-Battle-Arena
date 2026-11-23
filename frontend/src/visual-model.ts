@@ -7,6 +7,13 @@ export const tileCenter = (x: number, y: number, tileSize: number) => ({ x: (x +
 export function visibleBombs(snapshot: GameSnapshot) {
   return snapshot.bombs.map(({ id, x, y }) => ({ id, ...tileCenter(x, y, snapshot.map.tileSize) }));
 }
+/** Keep a bomb above a player on its tile and cycle visibility over a co-located item. */
+export function bombAppearance(snapshot: GameSnapshot, bomb: { x: number; y: number }, now: number) {
+  const size = snapshot.map.tileSize, x = Math.floor(bomb.x / size), y = Math.floor(bomb.y / size);
+  const player = snapshot.players.some(p => p.status !== "eliminated" && Math.floor(p.x / size) === x && Math.floor(p.y / size) === y);
+  const item = snapshot.items.some(i => i.x === x && i.y === y);
+  return { depth: player ? 14 : 6, scale: player ? .7 : .87, alpha: player && item ? .7 + .3 * Math.sin(now / 450) : 1 };
+}
 export function visibleItems(snapshot: GameSnapshot) {
   return snapshot.items.map(item => ({ ...item, position: tileCenter(item.x, item.y, snapshot.map.tileSize) }));
 }

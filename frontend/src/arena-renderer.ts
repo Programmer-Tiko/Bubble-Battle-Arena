@@ -1,7 +1,7 @@
 ﻿import Phaser from "phaser";
 import type { GameSnapshot, PlayerState } from "@bubble/shared";
 import { createArt } from "./art";
-import { displayItems, supplyMarkers, visibleBombs } from "./visual-model";
+import { bombAppearance, displayItems, supplyMarkers, visibleBombs } from "./visual-model";
 
 const colors = [0x6394d1, 0xf4ad65, 0xe983a1, 0xa18bd4, 0x60b7a2, 0xdec36c, 0xbc8d79, 0x91a6bc];
 type PoolName = "items" | "bombs" | "splash" | "markers" | "players" | "ghosts" | "balloon";
@@ -92,7 +92,8 @@ export class ArenaRenderer {
     }
     for (const bomb of visibleBombs(snapshot)) {
       const pulse = 1 + .035 * Math.sin(now / 350 + bomb.id * 1.7);
-      this.image("bombs", "bomb", bomb.x, bomb.y, size * .87 * pulse, 6);
+      const appearance = bombAppearance(snapshot, bomb, now);
+      this.image("bombs", "bomb", bomb.x, bomb.y, size * appearance.scale * pulse, appearance.depth).setAlpha(appearance.alpha);
     }
     if (snapshot.supplyPreview || snapshot.balloon) {
       const preview = snapshot.supplyPreview;
