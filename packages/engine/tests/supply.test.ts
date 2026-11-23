@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GameState, ItemType } from "@bubble/shared";
 import { Game } from "../src/index.js";
 
@@ -13,6 +13,26 @@ function steps(game: Game, count: number) { for (let i = 0; i < count; i++) game
 const supply = (state: GameState) => state.items.filter(item => item.supplyDroppedAt !== undefined);
 
 describe("balloon supply", () => {
+  it("uses fresh entropy for default matches while explicit seeds stay reproducible", () => {
+    const random = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation(array => {
+      (array as Uint32Array)[0] = random.mock.calls.length <= 5 ? 0 : 0xffffffff;
+      return array;
+    });
+    try {
+      const preview = (seed?: number) => {
+        const game = new Game(["a"], seed === undefined ? {} : { seed });
+        const state = (game as unknown as { state: GameState }).state;
+        state.tick = 5369; state.elapsedSeconds = 5369 / 30; game.step();
+        return game.getSnapshot().supplyPreview!.tiles;
+      };
+      const first = preview(), second = preview();
+      expect(first).not.toEqual(second);
+      const calls = random.mock.calls.length;
+      expect(preview(17)).toEqual(preview(17));
+      expect(random).toHaveBeenCalledTimes(calls);
+    } finally { random.mockRestore(); }
+  });
+
   it("announces at 179 seconds and lands unchanged even when tiles are occupied", () => {
     const { game, state } = fixture(33);
     steps(game, 178); expect(game.getSnapshot().supplyPreview).toBeNull();

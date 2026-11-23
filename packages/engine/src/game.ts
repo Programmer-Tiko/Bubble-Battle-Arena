@@ -1,5 +1,5 @@
 import type { BombState, AuthoritativeGameSnapshot as GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
-import { DEFAULT_MAP_CONFIG, generateMap, type MapConfig } from "./map.js";
+import { generateMap, type MapConfig } from "./map.js";
 import { seededRandom } from "./random.js";
 import { DEFAULT_MOVEMENT_CONFIG, movePlayer, type MovementConfig } from "./movement.js";
 import { visitBlast } from "./blast.js";
@@ -44,7 +44,13 @@ export class Game {
       }
       this.match = { ...match, teams: match.teams && { ...match.teams } };
     }
-    this.supplyRandom = seededRandom((mapConfig.seed ?? DEFAULT_MAP_CONFIG.seed) ^ 0x5a17b411);
+    // Explicit seeds retain reproducible simulations; ordinary matches need fresh,
+    // private randomness rather than the fixed default map seed.
+    this.supplyRandom = mapConfig.seed === undefined
+      ? () => globalThis.crypto?.getRandomValues
+        ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000
+        : Math.random()
+      : seededRandom(mapConfig.seed ^ 0x5a17b411);
     const { map, spawns } = generateMap({ ...mapConfig, playerCount: playerIds.length });
     this.movement = { ...DEFAULT_MOVEMENT_CONFIG, ...movementConfig };
     if (!Number.isFinite(this.movement.speed) || this.movement.speed < 0 || !Number.isFinite(this.movement.timestepSeconds) || this.movement.timestepSeconds <= 0 ||

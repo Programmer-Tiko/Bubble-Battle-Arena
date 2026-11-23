@@ -24,7 +24,7 @@ The initial floor supply contains four boots and two pickups of each other type,
 
 ## Phase 5 balloon defaults
 
-The headless engine uses a supply-specific random stream derived from the map seed. Each visit lasts 20 simulation seconds; all supply items are placed at the scheduled start, with a cosmetic landing effect. Occupied player tiles are excluded pending a design decision. If fewer than four valid tiles are available, the balloon appears but drops nothing; with four or five tiles it drops at most the number available. The open-ended local sandbox also shows the three scheduled visits. These defaults can be revisited when multiplayer and supply presentation are finalized.
+Ordinary matches use a fresh supply random stream independent of the fixed default map seed; explicitly seeded simulations retain reproducible supply selection. One second before each scheduled visit, the server samples distinct floor tiles uniformly without replacement and announces coordinates without item types. At landing it selects item types and places items at the announced tiles, regardless of occupants or danger. Intact walls are excluded. The balloon remains for 20 simulation seconds; the local sandbox also shows the three scheduled visits.
 
 ## Phase 6 network development boundary
 
