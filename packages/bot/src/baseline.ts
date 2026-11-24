@@ -1,4 +1,4 @@
-import type { GameSnapshot, MovementInput } from "@bubble/shared";
+import type { AuthoritativeGameSnapshot as GameSnapshot, MovementInput } from "@bubble/shared";
 
 /** Seeded random direction policy with basic wall avoidance, for evaluation. */
 export class RandomBaseline {

@@ -10,6 +10,24 @@ function openMap(): ArenaMap {
 const player = { id: "p", teamId: "p", x: 25, y: 25, status: "alive" as const, trappedSeconds: 0 };
 
 describe("map generation", () => {
+  it("defaults to a 30 by 26 arena with eight safe, separated spawns", () => {
+    for (let seed = 0; seed < 20; seed++) {
+      const { map, spawns } = generateMap({ playerCount: 8, seed });
+      expect([map.width, map.height, map.tileSize]).toEqual([30, 26, 32]);
+      expect(areSpawnsConnected(map, spawns)).toBe(true);
+      const reachable = new Set([`${spawns[0].x},${spawns[0].y}`]), queue = [spawns[0]];
+      for (let n = 0; n < queue.length; n++) for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const x = queue[n].x + dx, y = queue[n].y + dy, k = `${x},${y}`;
+        if (map.tiles[y]?.[x]?.type === "floor" && !reachable.has(k)) { reachable.add(k); queue.push({ x, y }); }
+      }
+      expect(reachable.size).toBe(map.tiles.flat().filter(tile => tile.type === "floor").length);
+      for (const [i, p] of spawns.entries()) {
+        for (const q of spawns.slice(i + 1)) expect(Math.abs(p.x - q.x) + Math.abs(p.y - q.y)).toBeGreaterThanOrEqual(10);
+        expect(map.tiles[p.y][p.x].type).toBe("floor");
+      }
+      expect(map.tiles.flat().filter(t => t.x === 0 || t.y === 0 || t.x === 29 || t.y === 25).every(t => t.type === "indestructible")).toBe(true);
+    }
+  });
   it("creates the configured grid and an indestructible border", () => {
     const { map } = generateMap({ width: 17, height: 11 });
     expect(map.tiles).toHaveLength(11);

@@ -1,10 +1,10 @@
 import { DEFAULT_BOMB_CONFIG, DEFAULT_MOVEMENT_CONFIG } from "@bubble/engine";
-import type { GameSnapshot, MovementInput, PlayerState } from "@bubble/shared";
+import type { AuthoritativeGameSnapshot as GameSnapshot, BotDifficulty, MovementInput, PlayerState } from "@bubble/shared";
 import { HazardMap } from "./hazard.js";
 import { findPath, type SearchOptions, type Waypoint } from "./pathfinding.js";
 
 export type BotState = "ESCAPE" | "COLLECT_ITEM" | "APPROACH_OPPONENT" | "REPOSITION" | "ATTACK" | "WAIT" | "TRAPPED" | "ELIMINATED";
-export type BotDifficulty = "easy" | "normal" | "hard";
+export type { BotDifficulty } from "@bubble/shared";
 const levels = {
   easy: { interval: 36, horizon: 3.6, threat: 3.4, escapeUntil: 3.6, goals: 1, nodes: 220, escapeNodes: 350 },
   normal: { interval: 18, horizon: 5, threat: 3.8, escapeUntil: 4, goals: 3, nodes: 350, escapeNodes: 500 },
@@ -78,7 +78,9 @@ export class BotController {
     const hereKey = `${here.x},${here.y}`;
     if (hereKey !== this.lastTile) { this.lastTile = hereKey; this.visits.set(hereKey, snapshot.tick); }
     const signature = snapshot.bombs.map(b => `${b.id}:${b.x},${b.y},${b.range}`).join("|") + ";" +
-      snapshot.explosions.map(e => `${e.id}:${e.x},${e.y}`).join("|") + ";" + snapshot.map.tiles.map(row => row.map(t => t.type[0]).join("")).join("");
+      snapshot.explosions.map(e => `${e.id}:${e.x},${e.y}`).join("|") + ";" +
+      snapshot.items.filter(i => i.kind !== "pickup" && i.active).map(i => `${i.id}:${i.x},${i.y}`).join("|") + ";" +
+      snapshot.map.tiles.map(row => row.map(t => t.type[0]).join("")).join("");
     const changed = signature !== this.signature;
     if (this.lastPosition && this.wasMoving && this.path.length && Math.hypot(p.x - this.lastPosition.x, p.y - this.lastPosition.y) < 0.01) this.stuck++;
     else this.stuck = 0;
@@ -104,7 +106,8 @@ export class BotController {
         this.path = this.escape(snapshot, p, hazards, config.escapeUntil);
         this.state = "ESCAPE"; this.reason = this.path.length ? "Bomb danger; moving to safety" : "No safe route found";
       } else {
-        const hypothetical = structuredClone(snapshot);
+        // Prediction copies the map internally; only the bomb array changes here.
+        const hypothetical = { ...snapshot, bombs: [...snapshot.bombs] };
         const proposedId = Math.min(-1, ...hypothetical.bombs.map(b => b.id - 1));
         hypothetical.bombs.push({ id: proposedId, ownerId: p.id, x: here.x, y: here.y, remainingSeconds: DEFAULT_BOMB_CONFIG.fuseSeconds, range: 1 + p.rangeUpgrades });
         const predicted = new HazardMap(hypothetical), blastTime = predicted.detonationTimes.get(proposedId)!;

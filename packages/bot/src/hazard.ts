@@ -1,5 +1,5 @@
 import { DEFAULT_BOMB_CONFIG, DEFAULT_MOVEMENT_CONFIG, visitBlast, type BombConfig } from "@bubble/engine";
-import type { BombState, GameSnapshot } from "@bubble/shared";
+import type { BombState, AuthoritativeGameSnapshot as GameSnapshot } from "@bubble/shared";
 
 export interface Interval { start: number; end: number }
 const key = (x: number, y: number) => `${x},${y}`;
@@ -12,7 +12,8 @@ export class HazardMap {
 
   constructor(snapshot: GameSnapshot, config: BombConfig = DEFAULT_BOMB_CONFIG, dt = DEFAULT_MOVEMENT_CONFIG.timestepSeconds) {
     if (!Number.isFinite(dt) || dt <= 0) throw new RangeError("Invalid timestep");
-    const tiles = snapshot.map.tiles.map(row => row.map(tile => ({ ...tile })));
+    // Blast prediction only mutates tiles when there are bombs.
+    const tiles = snapshot.bombs.length ? snapshot.map.tiles.map(row => row.map(tile => ({ ...tile }))) : snapshot.map.tiles;
     const bombs = snapshot.bombs.map(b => ({ ...b }));
     const tickAt = (seconds: number) => Math.max(1, Math.ceil((seconds - 1e-9) / dt));
     const add = (x: number, y: number, start: number, end: number) => {

@@ -1,10 +1,13 @@
-import type { BombState, GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
-import { DEFAULT_MAP_CONFIG, generateMap, type MapConfig } from "./map.js";
+import type { BombState, AuthoritativeGameSnapshot as GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
+import { generateMap, type MapConfig } from "./map.js";
 import { seededRandom } from "./random.js";
 import { DEFAULT_MOVEMENT_CONFIG, movePlayer, type MovementConfig } from "./movement.js";
 import { visitBlast } from "./blast.js";
 
 const IDLE: MovementInput = { up: false, down: false, left: false, right: false };
+const freshRandom = () => globalThis.crypto?.getRandomValues
+  ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000
+  : Math.random();
 /** Provisional values until the team agrees on limits and visual duration. */
 export interface MatchConfig { mode: "ffa" | "team"; teams?: Record<string, string>; timeLimitSeconds?: number }
 export interface ItemConfig { initialOtherPerType: number; chargesPerHazard: number }
@@ -24,6 +27,7 @@ export class Game {
   private nextItemId = 0;
   private supplyRandom: () => number;
   private nextSupplyIndex = 0;
+  private pendingSupply: { x: number; y: number }[] | null = null;
   private hitExplosions = new Map<number, Set<string>>();
   private match?: MatchConfig;
   constructor(playerIds: string[], mapConfig: Partial<MapConfig> = {}, movementConfig: Partial<MovementConfig> = {}, bombConfig: Partial<BombConfig> = {}, match?: MatchConfig, itemConfig: Partial<ItemConfig> = {}) {
@@ -43,7 +47,9 @@ export class Game {
       }
       this.match = { ...match, teams: match.teams && { ...match.teams } };
     }
-    this.supplyRandom = seededRandom((mapConfig.seed ?? DEFAULT_MAP_CONFIG.seed) ^ 0x5a17b411);
+    // Explicit seeds retain reproducible simulations; ordinary matches need fresh,
+    // private randomness rather than the fixed default map seed.
+    this.supplyRandom = mapConfig.seed === undefined ? freshRandom : seededRandom(mapConfig.seed ^ 0x5a17b411);
     const { map, spawns } = generateMap({ ...mapConfig, playerCount: playerIds.length });
     this.movement = { ...DEFAULT_MOVEMENT_CONFIG, ...movementConfig };
     if (!Number.isFinite(this.movement.speed) || this.movement.speed < 0 || !Number.isFinite(this.movement.timestepSeconds) || this.movement.timestepSeconds <= 0 ||
@@ -58,13 +64,70 @@ export class Game {
         !Number.isInteger(b.initialCapacity) || b.initialCapacity < 1 || !Number.isInteger(b.maxCapacity) || b.maxCapacity < b.initialCapacity ||
         !Number.isInteger(b.maxRange) || b.maxRange < 1 || typeof b.stopAtDestructible !== "boolean" || !["ignore", "reset", "eliminate"].includes(b.repeatedHit)) throw new RangeError("Invalid bomb configuration");
     for (const id of playerIds) this.upgrades.set(id, { capacity: b.initialCapacity, range: 1 });
-    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [], balloon: null };
-    // Provisional initial distribution: four boots and a configurable supply of other items.
+    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [], balloon: null, supplyPreview: null };
+    // Use a separate stream so initial placement cannot alter balloon drops.
+    const itemRandom = seededRandom((mapConfig.seed === undefined ? Math.floor(freshRandom() * 0x100000000) : mapConfig.seed) ^ 0x317e6a21);
     const available = map.tiles.flat().filter(t => t.type === "floor" && !spawns.some(p => Math.abs(p.x - t.x) + Math.abs(p.y - t.y) <= 1));
-    for (const tile of map.tiles.flat()) if (tile.type === "floor" && !available.includes(tile)) available.push(tile);
-    const types: ItemType[] = ["boots", "boots", "boots", "boots"];
+    const fallback = map.tiles.flat().filter(t => t.type === "floor" && !available.includes(t));
+    const types: ItemType[] = [];
     for (const type of ["capacity", "range", "banana", "slowdown"] as const) for (let i = 0; i < this.itemConfig.initialOtherPerType; i++) types.push(type);
-    for (const type of types) { const tile = available.shift(); if (tile) this.addItem(type, tile.x, tile.y, "pickup"); }
+    // Shuffle to break equal-scoring choices reproducibly without favoring a spawn.
+    for (let i = types.length - 1; i > 0; i--) { const j = Math.floor(itemRandom() * (i + 1)); [types[i], types[j]] = [types[j], types[i]]; }
+    for (let i = available.length - 1; i > 0; i--) { const j = Math.floor(itemRandom() * (i + 1)); [available[i], available[j]] = [available[j], available[i]]; }
+    const chosen: typeof available = [];
+    // Balance the worst nearest walkable distance and the gap between spawns,
+    // breaking ties by total distance. Every distance uses the floor graph.
+    const cell = (x: number, y: number) => y * map.width + x;
+    const distances = spawns.map(spawn => {
+      const dist = new Int32Array(map.width * map.height).fill(-1), queue = [cell(spawn.x, spawn.y)];
+      dist[queue[0]] = 0;
+      for (let q = 0; q < queue.length; q++) {
+        const at = queue[q], x = at % map.width, y = Math.floor(at / map.width);
+        for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx = x + dx, ny = y + dy, next = cell(nx, ny);
+          if (map.tiles[ny]?.[nx]?.type === "floor" && dist[next] < 0) { dist[next] = dist[at] + 1; queue.push(next); }
+        }
+      }
+      return dist;
+    });
+    const candidates = available.length >= 4 ? [...available] : [...available, ...fallback];
+    const bootTiles = candidates.slice(0, Math.min(4, candidates.length));
+    const score = () => {
+      let worst = 0, closest = Infinity, total = 0;
+      for (const dist of distances) {
+        let nearest = Infinity;
+        for (const t of bootTiles) { const d = dist[cell(t.x, t.y)]; if (d >= 0) nearest = Math.min(nearest, d); }
+        worst = Math.max(worst, nearest); closest = Math.min(closest, nearest); total += nearest;
+      }
+      return [2 * worst + (worst - closest), total];
+    };
+    // Coordinate descent is bounded and keeps equal-score random tie order.
+    for (let pass = 0; pass < 3; pass++) for (let i = 0; i < bootTiles.length; i++) {
+      let best = bootTiles[i], [bestWorst, bestTotal] = score();
+      for (const candidate of candidates) {
+        if (bootTiles.some((t, j) => j !== i && t === candidate)) continue;
+        bootTiles[i] = candidate;
+        const [worst, total] = score();
+        if (worst < bestWorst || (worst === bestWorst && total < bestTotal)) { best = candidate; bestWorst = worst; bestTotal = total; }
+      }
+      bootTiles[i] = best;
+    }
+    for (const t of bootTiles) {
+      const pool = available.includes(t) ? available : fallback;
+      pool.splice(pool.indexOf(t), 1); chosen.push(t); this.addItem("boots", t.x, t.y, "pickup");
+    }
+    // Spread the other item types around the selected boots.
+    for (const type of types) {
+      if (!available.length) available.push(...fallback.splice(0));
+      if (!available.length) break;
+      let best = 0, score = -1;
+      for (let i = 0; i < available.length; i++) {
+        const t = available[i];
+        const spacing = chosen.length ? Math.min(...chosen.map(p => Math.abs(p.x - t.x) + Math.abs(p.y - t.y))) : Infinity;
+        if (spacing > score) { best = i; score = spacing; }
+      }
+      const [t] = available.splice(best, 1); chosen.push(t); this.addItem(type, t.x, t.y, "pickup");
+    }
   }
   setInput(playerId: string, input: MovementInput): void {
     if (!this.state.players.some(p => p.id === playerId)) throw new RangeError("Unknown player");
@@ -74,32 +137,35 @@ export class Game {
   private addItem(type: ItemType, x: number, y: number, kind: GroundItem["kind"], ownerId?: string): void {
     this.state.items.push({ id: this.nextItemId++, type, x, y, kind, ownerId, active: kind !== "trap" });
   }
-  /** A bounded selection from currently free floor tiles. Fewer than four means no drop. */
-  private spawnSupply(startedAt: number): void {
-    this.state.balloon = { startedAt, durationSeconds: 20 };
-    const size = this.state.map.tileSize;
-    const tiles = this.state.map.tiles.flat().filter(tile => tile.type === "floor" &&
-      !this.state.items.some(item => item.x === tile.x && item.y === tile.y) &&
-      !this.state.bombs.some(bomb => bomb.x === tile.x && bomb.y === tile.y) &&
-      !this.state.players.some(player => player.status !== "eliminated" && Math.floor(player.x / size) === tile.x && Math.floor(player.y / size) === tile.y));
-    if (tiles.length < 4) return;
+  /** Select floor tiles uniformly without replacement, regardless of occupants or danger. */
+  private selectSupplyTiles(): { x: number; y: number }[] {
+    const tiles = this.state.map.tiles.flat().filter(tile => tile.type === "floor");
     const count = Math.min(4 + Math.floor(this.supplyRandom() * 3), tiles.length);
-    const types: ItemType[] = ["boots", "capacity", "range", "banana", "slowdown"];
-    const chosen: ItemType[] = [];
     for (let i = 0; i < count; i++) {
       const j = i + Math.floor(this.supplyRandom() * (tiles.length - i));
       [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
-      chosen.push(types[Math.floor(this.supplyRandom() * types.length)]);
     }
-    // Guarantee diversity without retry loops or biasing every event to a fixed category.
-    if (chosen.every(type => type === chosen[0])) {
+    return tiles.slice(0, count).map(({ x, y }) => ({ x, y }));
+  }
+  private announceSupply(scheduledAt: number): void {
+    this.pendingSupply = this.selectSupplyTiles();
+    this.state.supplyPreview = { announcedAt: this.state.elapsedSeconds, scheduledAt, tiles: this.pendingSupply.map(tile => ({ ...tile })) };
+  }
+  private spawnSupply(startedAt: number): void {
+    this.state.balloon = { startedAt, durationSeconds: 20 };
+    const tiles = this.pendingSupply ?? this.selectSupplyTiles();
+    const types: ItemType[] = ["boots", "capacity", "range", "banana", "slowdown"];
+    const chosen = tiles.map(() => types[Math.floor(this.supplyRandom() * types.length)]);
+    if (chosen.length > 1 && chosen.every(type => type === chosen[0])) {
       const first = types.indexOf(chosen[0]);
-      chosen[count - 1] = types[(first + 1 + Math.floor(this.supplyRandom() * (types.length - 1))) % types.length];
+      chosen[chosen.length - 1] = types[(first + 1 + Math.floor(this.supplyRandom() * (types.length - 1))) % types.length];
     }
-    for (let i = 0; i < count; i++) {
-      this.addItem(chosen[i], tiles[i].x, tiles[i].y, "pickup");
+    tiles.forEach((tile, index) => {
+      this.addItem(chosen[index], tile.x, tile.y, "pickup");
       this.state.items[this.state.items.length - 1].supplyDroppedAt = startedAt;
-    }
+    });
+    this.pendingSupply = null;
+    this.state.supplyPreview = null;
   }
   /** Place one inventory charge on the current tile. Slots are zero-based. */
   useItem(playerId: string, slot: number): boolean {
@@ -134,9 +200,11 @@ export class Game {
     for (const [type, count] of [["boots", p.boots], ["capacity", p.capacityUpgrades], ["range", p.rangeUpgrades]] as const)
       for (let i = 0; i < count; i++) types.push({ type, kind: "pickup" });
     for (const slot of p.inventory) if (slot) for (let i = 0; i < slot.charges; i += this.itemConfig.chargesPerHazard) types.push({ type: slot.type, kind: "hazard" });
-    const size = this.state.map.tileSize, px = Math.floor(p.x / size), py = Math.floor(p.y / size);
-    const tiles = this.state.map.tiles.flat().filter(t => t.type === "floor" && !this.state.bombs.some(b => b.x === t.x && b.y === t.y) && !this.state.items.some(i => i.x === t.x && i.y === t.y) && !this.state.players.some(other => other.status !== "eliminated" && Math.floor(other.x / size) === t.x && Math.floor(other.y / size) === t.y))
-      .sort((a, b) => (Math.abs(a.x-px)+Math.abs(a.y-py)) - (Math.abs(b.x-px)+Math.abs(b.y-py)) || a.y-b.y || a.x-b.x);
+    const size = this.state.map.tileSize;
+    const tiles = this.state.map.tiles.flat().filter(t => t.type === "floor" && !this.state.bombs.some(b => b.x === t.x && b.y === t.y) && !this.state.items.some(i => i.x === t.x && i.y === t.y) && !this.state.players.some(other => other.status !== "eliminated" && Math.floor(other.x / size) === t.x && Math.floor(other.y / size) === t.y));
+    for (let i = tiles.length - 1; i > 0; i--) {
+      const j = Math.floor(freshRandom() * (i + 1)); [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+    }
     // Multiple drops share valid tiles when there are more drops than free tiles.
     for (let i = 0; i < types.length && tiles.length; i++) this.addItem(types[i].type, tiles[i % tiles.length].x, tiles[i % tiles.length].y, types[i].kind);
     p.boots = p.capacityUpgrades = p.rangeUpgrades = 0; p.inventory = Array(5).fill(null);
@@ -271,8 +339,12 @@ export class Game {
     }
     if (this.state.balloon && this.state.elapsedSeconds >= this.state.balloon.startedAt + this.state.balloon.durationSeconds) this.state.balloon = null;
     const schedule = [180, 360, 540];
-    while (!this.state.result && this.nextSupplyIndex < schedule.length && this.state.elapsedSeconds + 1e-9 >= schedule[this.nextSupplyIndex]) {
-      this.spawnSupply(schedule[this.nextSupplyIndex++]);
+    if (this.state.result) { this.pendingSupply = null; this.state.supplyPreview = null; }
+    while (!this.state.result && this.nextSupplyIndex < schedule.length) {
+      const scheduledAt = schedule[this.nextSupplyIndex];
+      if (!this.state.supplyPreview && this.state.elapsedSeconds + 1e-9 >= scheduledAt - 1) this.announceSupply(scheduledAt);
+      if (this.state.elapsedSeconds + 1e-9 < scheduledAt) break;
+      this.spawnSupply(scheduledAt); this.nextSupplyIndex++;
     }
   }
   /** Return a detached public copy so consumers cannot mutate the simulation. */

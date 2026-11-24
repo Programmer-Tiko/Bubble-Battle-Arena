@@ -38,4 +38,14 @@ describe("time-expanded pathfinding", () => {
     for (const [x, y] of [[4, 3], [2, 3], [3, 2], [3, 4]]) snapshot.map.tiles[y][x].type = "indestructible";
     expect(findPath(snapshot, player, { x: 5, y: 3 }, new HazardMap(snapshot), { horizonSeconds: 1 }).path).toEqual([]);
   });
+  it("avoids active dropped hazards while allowing collectible items", () => {
+    const { snapshot, player } = fixture();
+    snapshot.items = [
+      { id: 100, x: 4, y: 3, type: "banana", kind: "hazard", active: true },
+      { id: 101, x: 5, y: 3, type: "boots", kind: "pickup", active: true },
+    ];
+    const result = findPath(snapshot, player, { x: 5, y: 3 }, new HazardMap(snapshot));
+    expect(result.path.at(-1)).toMatchObject({ x: 5, y: 3 });
+    expect(result.path.some(p => p.x === 4 && p.y === 3)).toBe(false);
+  });
 });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { io, type Socket } from "socket.io-client";
-import type { ClientEvents, GameState, JoinInfo, Reply, ServerEvents } from "@bubble/shared";
-import { createGameServer, type Session } from "../src/server.js";
+import type { ClientEvents, GameState, GameSnapshot, JoinInfo, Reply, ServerEvents } from "@bubble/shared";
+import { createGameServer, publicSnapshot, type Session } from "../src/server.js";
 
 let server: ReturnType<typeof createGameServer>, url: string;
 let sockets: Socket<ServerEvents, ClientEvents>[];
@@ -30,6 +30,42 @@ beforeEach(async () => {
 afterEach(async () => { sockets.forEach(s => s.disconnect()); await server.close(); });
 
 describe("server-controlled bots", () => {
+  it("reuses an unchanged view but refreshes it after a bot places a bomb", () => {
+    const session = server.create("ffa", 4, 4), s = openArena(session);
+    const snapshots = vi.spyOn(session.game, "getSnapshot");
+    const idle = { up: false, down: false, left: false, right: false };
+    const observed: number[] = [];
+    session.slots.forEach((slot, index) => vi.spyOn(slot.bot!, "update").mockImplementation(view => {
+      observed.push(view.bombs.length);
+      return { input: idle, placeBomb: index === 0, state: "WAIT", reason: "test" };
+    }));
+    server.tick(session);
+    expect(observed).toEqual([0, 1, 1, 1]);
+    expect(snapshots).toHaveBeenCalledTimes(3); // initial, successful placement, post-step
+    expect(s.bombs).toHaveLength(1);
+  });
+  it("freezes detached nested state and reuses it after an unsuccessful placement", () => {
+    const session = server.create("ffa", 4, 4), s = openArena(session), idle = { up: false, down: false, left: false, right: false };
+    expect(session.game.placeBomb(session.slots[0].id)).toBe(true);
+    const views: GameState[] = [];
+    session.slots.forEach((slot, index) => vi.spyOn(slot.bot!, "update").mockImplementation(view => {
+      views.push(view);
+      if (index === 0) {
+        expect(Object.isFrozen(view)).toBe(true);
+        expect(Object.isFrozen(view.map.tiles[1][1])).toBe(true);
+        expect(Object.isFrozen(view.players[0].inventory)).toBe(true);
+        expect(() => { view.map.tiles[1][1].type = "destructible"; }).toThrow();
+        expect(() => { view.bombs.push({ ...view.bombs[0] }); }).toThrow();
+      }
+      return { input: idle, placeBomb: index === 0, state: "WAIT", reason: "test" };
+    }));
+    const snapshots = vi.spyOn(session.game, "getSnapshot");
+    server.tick(session);
+    expect(views.every(view => view === views[0])).toBe(true);
+    expect(snapshots).toHaveBeenCalledTimes(2);
+    expect(s.map.tiles[1][1].type).toBe("floor");
+    expect(session.game.getSnapshot().bombs).toHaveLength(1);
+  });
   it.each([
     ["ffa", 4, 3, "normal"], ["ffa", 4, 3, "hard"], ["ffa", 4, 4, "normal"],
     ["ffa", 8, 8, "normal"], ["team", 4, 2, "normal"],
@@ -54,13 +90,13 @@ describe("server-controlled bots", () => {
     expect((await connect(session, "player")).reply.ok).toBe(false);
     const spectatorBomb: Reply = await new Promise(resolve => spectator.socket.emit("bomb", { seq: 0 }, resolve));
     expect(spectatorBomb.ok).toBe(false);
-    const seen: GameState[] = []; spectator.socket.on("snapshot", s => seen.push(s));
+    const seen: GameSnapshot[] = []; spectator.socket.on("snapshot", s => seen.push(s));
     const initial = session.game.getSnapshot(); steps(session, 35);
     await vi.waitFor(() => expect(seen.at(-1)?.tick).toBe(35));
     expect(initial.players).toHaveLength(4);
     const moved = session.game.getSnapshot();
     expect(moved.players.slice(1).some((p, i) => Math.hypot(p.x - initial.players[i + 1].x, p.y - initial.players[i + 1].y) > 5)).toBe(true);
-    expect(seen.at(-1)).toEqual(moved);
+    expect(seen.at(-1)).toEqual(JSON.parse(JSON.stringify(publicSnapshot(moved))));
   });
   it("collects a pickup by navigating real movement and avoids walls", () => {
     const session = server.create("ffa", 4, 1), s = openArena(session), bot = s.players[3], size = s.map.tileSize;
@@ -85,7 +121,7 @@ describe("server-controlled bots", () => {
     const session = server.create("ffa", 4, 1), s = openArena(session), bot = s.players[3], size = s.map.tileSize;
     bot.x = 5.5 * size; bot.y = 5.5 * size; s.map.tiles[5][6].type = "destructible";
     const human = await connect(session, "player"), spectator = await connect(session, "spectator");
-    const seenHuman: GameState[] = [], seenSpectator: GameState[] = [];
+    const seenHuman: GameSnapshot[] = [], seenSpectator: GameSnapshot[] = [];
     human.socket.on("snapshot", v => seenHuman.push(v)); spectator.socket.on("snapshot", v => seenSpectator.push(v));
     steps(session, 1);
     await vi.waitFor(() => expect(seenHuman.at(-1)?.bombs.some(b => b.ownerId === bot.id)).toBe(true));
@@ -151,17 +187,27 @@ describe("server-controlled bots", () => {
   it("exposes actual controller data only when debug is enabled", async () => {
     const ordinary = server.create("ffa", 4, 1); steps(ordinary, 1);
     expect((await fetch(`${url}/dev/sessions/${ordinary.id}/bot-debug`)).status).toBe(404);
-    const debugServer = createGameServer({ autoTick: false, botDebug: true });
+    const debugServer = createGameServer({ autoTick: false, botDebug: true, snapshotEveryTicks: 1 });
     await new Promise<void>(resolve => debugServer.http.listen(0, "127.0.0.1", resolve));
     try {
       const addr = debugServer.http.address(); if (!addr || typeof addr === "string") throw new Error("No address");
-      const session = debugServer.create("ffa", 4, 1); debugServer.tick(session);
+      const session = debugServer.create("ffa", 4, 1);
+      expect(session.game.placeBomb(session.slots[3].id)).toBe(true);
+      const normalUrl = url; url = `http://127.0.0.1:${addr.port}`;
+      const spectator = await connect(session, "spectator"); url = normalUrl;
+      if (!spectator.reply.ok) throw new Error("Spectator join failed");
+      expect(spectator.reply.value.snapshot.bombs[0]).not.toHaveProperty("remainingSeconds");
+      const snapshots: GameSnapshot[] = []; spectator.socket.on("snapshot", value => snapshots.push(value));
+      debugServer.tick(session);
+      await vi.waitFor(() => expect(snapshots.length).toBeGreaterThan(0));
+      expect(snapshots[0].bombs[0]).not.toHaveProperty("remainingSeconds");
       const response = await fetch(`http://127.0.0.1:${addr.port}/dev/sessions/${session.id}/bot-debug`);
       const data = await response.json(), slot = session.slots[3], player = session.game.getSnapshot().players[3];
       expect(data).toHaveLength(1); expect(data[0].playerId).toBe(slot.id);
       expect(data[0].state).toBe(slot.botCommand?.state); expect(data[0].reason).toBe(slot.botCommand?.reason);
       expect(data[0].position).toEqual({ x: player.x, y: player.y });
       expect(data[0].path).toEqual(slot.bot!.debug(session.game.getSnapshot(), slot.botCommand!).path);
+      expect(data[0].danger.length).toBeGreaterThan(0);
     } finally { await debugServer.close(); }
   });
 });

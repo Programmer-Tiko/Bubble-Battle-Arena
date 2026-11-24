@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GameState, GroundItem, MovementInput } from "@bubble/shared";
 import { Game } from "../src/index.js";
 
@@ -18,6 +18,54 @@ function add(state: GameState, type: GroundItem["type"], x = 5, y = 5, kind: Gro
 function steps(game: Game, count: number) { for (let i = 0; i < count; i++) game.step(); }
 
 describe("items and inventory", () => {
+  it("spreads seeded initial pickups over reachable floor while preserving types", () => {
+    const make = (seed: number) => new Game(["a", "b", "c", "d", "e", "f", "g", "h"], { seed }).getSnapshot();
+    const first = make(42);
+    expect(make(42).items).toEqual(first.items);
+    expect(make(43).items.map(i => [i.x, i.y])).not.toEqual(first.items.map(i => [i.x, i.y]));
+    expect(first.items.filter(i => i.type === "boots")).toHaveLength(4);
+    for (const type of ["capacity", "range", "banana", "slowdown"]) expect(first.items.filter(i => i.type === type)).toHaveLength(2);
+    expect(first.items.every(i => i.kind === "pickup" && i.active && first.map.tiles[i.y][i.x].type === "floor")).toBe(true);
+    expect(new Set(first.items.map(i => `${i.x},${i.y}`)).size).toBe(first.items.length);
+    expect(new Set(first.items.map(i => `${Number(i.x >= first.map.width / 2)},${Number(i.y >= first.map.height / 2)}`)).size).toBe(4);
+    expect(first.items.every(i => first.players.every(p => Math.abs(i.x - Math.floor(p.x / first.map.tileSize)) + Math.abs(i.y - Math.floor(p.y / first.map.tileSize)) > 1))).toBe(true);
+  });
+  it("keeps nearest boots reasonably balanced by walkable distance across seeded eight-player maps", () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const s = new Game(["a", "b", "c", "d", "e", "f", "g", "h"], { seed }).getSnapshot();
+      const boots = new Set(s.items.filter(i => i.type === "boots").map(i => `${i.x},${i.y}`));
+      const nearest = s.players.map(p => {
+        const x = Math.floor(p.x / s.map.tileSize), y = Math.floor(p.y / s.map.tileSize);
+        const queue = [{ x, y, d: 0 }], seen = new Set([`${x},${y}`]);
+        for (let i = 0; i < queue.length; i++) {
+          const q = queue[i]; if (boots.has(`${q.x},${q.y}`)) return q.d;
+          for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+            const nx = q.x + dx, ny = q.y + dy, key = `${nx},${ny}`;
+            if (s.map.tiles[ny]?.[nx]?.type === "floor" && !seen.has(key)) { seen.add(key); queue.push({ x: nx, y: ny, d: q.d + 1 }); }
+          }
+        }
+        return Infinity;
+      });
+      expect(Math.max(...nearest)).toBeLessThan(Infinity);
+      expect(Math.max(...nearest) - Math.min(...nearest)).toBeLessThanOrEqual(20);
+    }
+  });
+  it("randomizes elimination drop locations while preserving item quantities", () => {
+    const random = vi.spyOn(globalThis.crypto, "getRandomValues");
+    try {
+      const drop = (value: number) => {
+        random.mockImplementation(array => { (array as Uint32Array)[0] = value; return array; });
+        const { game, state } = fixture();
+        state.players[0].boots = 2; state.players[0].inventory[0] = { type: "banana", charges: 2 };
+        state.players[0].status = "trapped"; state.players[0].trappedSeconds = .1; game.step();
+        return game.getSnapshot().items;
+      };
+      const a = drop(0), b = drop(0xffffffff);
+      expect(a.map(i => [i.type, i.kind]).sort()).toEqual(b.map(i => [i.type, i.kind]).sort());
+      expect(a).toHaveLength(4); expect(b).toHaveLength(4);
+      expect(a.map(i => [i.x, i.y])).not.toEqual(b.map(i => [i.x, i.y]));
+    } finally { random.mockRestore(); }
+  });
   it("starts with exactly four collectible boots and detached snapshots", () => {
     const game = new Game(["a"]);
     const snapshot = game.getSnapshot();
