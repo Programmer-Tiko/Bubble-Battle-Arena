@@ -1,5 +1,5 @@
-import type { BombState, GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
-import { DEFAULT_MAP_CONFIG, generateMap, type MapConfig } from "./map.js";
+import type { BombState, AuthoritativeGameSnapshot as GameSnapshot, GameState, MovementInput, ItemType, TrapType, GroundItem } from "@bubble/shared";
+import { generateMap, type MapConfig } from "./map.js";
 import { seededRandom } from "./random.js";
 import { DEFAULT_MOVEMENT_CONFIG, movePlayer, type MovementConfig } from "./movement.js";
 import { visitBlast } from "./blast.js";
@@ -24,6 +24,7 @@ export class Game {
   private nextItemId = 0;
   private supplyRandom: () => number;
   private nextSupplyIndex = 0;
+  private pendingSupply: { x: number; y: number }[] | null = null;
   private hitExplosions = new Map<number, Set<string>>();
   private match?: MatchConfig;
   constructor(playerIds: string[], mapConfig: Partial<MapConfig> = {}, movementConfig: Partial<MovementConfig> = {}, bombConfig: Partial<BombConfig> = {}, match?: MatchConfig, itemConfig: Partial<ItemConfig> = {}) {
@@ -43,7 +44,13 @@ export class Game {
       }
       this.match = { ...match, teams: match.teams && { ...match.teams } };
     }
-    this.supplyRandom = seededRandom((mapConfig.seed ?? DEFAULT_MAP_CONFIG.seed) ^ 0x5a17b411);
+    // Explicit seeds retain reproducible simulations; ordinary matches need fresh,
+    // private randomness rather than the fixed default map seed.
+    this.supplyRandom = mapConfig.seed === undefined
+      ? () => globalThis.crypto?.getRandomValues
+        ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000
+        : Math.random()
+      : seededRandom(mapConfig.seed ^ 0x5a17b411);
     const { map, spawns } = generateMap({ ...mapConfig, playerCount: playerIds.length });
     this.movement = { ...DEFAULT_MOVEMENT_CONFIG, ...movementConfig };
     if (!Number.isFinite(this.movement.speed) || this.movement.speed < 0 || !Number.isFinite(this.movement.timestepSeconds) || this.movement.timestepSeconds <= 0 ||
@@ -58,7 +65,7 @@ export class Game {
         !Number.isInteger(b.initialCapacity) || b.initialCapacity < 1 || !Number.isInteger(b.maxCapacity) || b.maxCapacity < b.initialCapacity ||
         !Number.isInteger(b.maxRange) || b.maxRange < 1 || typeof b.stopAtDestructible !== "boolean" || !["ignore", "reset", "eliminate"].includes(b.repeatedHit)) throw new RangeError("Invalid bomb configuration");
     for (const id of playerIds) this.upgrades.set(id, { capacity: b.initialCapacity, range: 1 });
-    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [], balloon: null };
+    this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [], balloon: null, supplyPreview: null };
     // Provisional initial distribution: four boots and a configurable supply of other items.
     const available = map.tiles.flat().filter(t => t.type === "floor" && !spawns.some(p => Math.abs(p.x - t.x) + Math.abs(p.y - t.y) <= 1));
     for (const tile of map.tiles.flat()) if (tile.type === "floor" && !available.includes(tile)) available.push(tile);
@@ -74,32 +81,35 @@ export class Game {
   private addItem(type: ItemType, x: number, y: number, kind: GroundItem["kind"], ownerId?: string): void {
     this.state.items.push({ id: this.nextItemId++, type, x, y, kind, ownerId, active: kind !== "trap" });
   }
-  /** A bounded selection from currently free floor tiles. Fewer than four means no drop. */
-  private spawnSupply(startedAt: number): void {
-    this.state.balloon = { startedAt, durationSeconds: 20 };
-    const size = this.state.map.tileSize;
-    const tiles = this.state.map.tiles.flat().filter(tile => tile.type === "floor" &&
-      !this.state.items.some(item => item.x === tile.x && item.y === tile.y) &&
-      !this.state.bombs.some(bomb => bomb.x === tile.x && bomb.y === tile.y) &&
-      !this.state.players.some(player => player.status !== "eliminated" && Math.floor(player.x / size) === tile.x && Math.floor(player.y / size) === tile.y));
-    if (tiles.length < 4) return;
+  /** Select floor tiles uniformly without replacement, regardless of occupants or danger. */
+  private selectSupplyTiles(): { x: number; y: number }[] {
+    const tiles = this.state.map.tiles.flat().filter(tile => tile.type === "floor");
     const count = Math.min(4 + Math.floor(this.supplyRandom() * 3), tiles.length);
-    const types: ItemType[] = ["boots", "capacity", "range", "banana", "slowdown"];
-    const chosen: ItemType[] = [];
     for (let i = 0; i < count; i++) {
       const j = i + Math.floor(this.supplyRandom() * (tiles.length - i));
       [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
-      chosen.push(types[Math.floor(this.supplyRandom() * types.length)]);
     }
-    // Guarantee diversity without retry loops or biasing every event to a fixed category.
-    if (chosen.every(type => type === chosen[0])) {
+    return tiles.slice(0, count).map(({ x, y }) => ({ x, y }));
+  }
+  private announceSupply(scheduledAt: number): void {
+    this.pendingSupply = this.selectSupplyTiles();
+    this.state.supplyPreview = { announcedAt: this.state.elapsedSeconds, scheduledAt, tiles: this.pendingSupply.map(tile => ({ ...tile })) };
+  }
+  private spawnSupply(startedAt: number): void {
+    this.state.balloon = { startedAt, durationSeconds: 20 };
+    const tiles = this.pendingSupply ?? this.selectSupplyTiles();
+    const types: ItemType[] = ["boots", "capacity", "range", "banana", "slowdown"];
+    const chosen = tiles.map(() => types[Math.floor(this.supplyRandom() * types.length)]);
+    if (chosen.length > 1 && chosen.every(type => type === chosen[0])) {
       const first = types.indexOf(chosen[0]);
-      chosen[count - 1] = types[(first + 1 + Math.floor(this.supplyRandom() * (types.length - 1))) % types.length];
+      chosen[chosen.length - 1] = types[(first + 1 + Math.floor(this.supplyRandom() * (types.length - 1))) % types.length];
     }
-    for (let i = 0; i < count; i++) {
-      this.addItem(chosen[i], tiles[i].x, tiles[i].y, "pickup");
+    tiles.forEach((tile, index) => {
+      this.addItem(chosen[index], tile.x, tile.y, "pickup");
       this.state.items[this.state.items.length - 1].supplyDroppedAt = startedAt;
-    }
+    });
+    this.pendingSupply = null;
+    this.state.supplyPreview = null;
   }
   /** Place one inventory charge on the current tile. Slots are zero-based. */
   useItem(playerId: string, slot: number): boolean {
@@ -271,8 +281,12 @@ export class Game {
     }
     if (this.state.balloon && this.state.elapsedSeconds >= this.state.balloon.startedAt + this.state.balloon.durationSeconds) this.state.balloon = null;
     const schedule = [180, 360, 540];
-    while (!this.state.result && this.nextSupplyIndex < schedule.length && this.state.elapsedSeconds + 1e-9 >= schedule[this.nextSupplyIndex]) {
-      this.spawnSupply(schedule[this.nextSupplyIndex++]);
+    if (this.state.result) { this.pendingSupply = null; this.state.supplyPreview = null; }
+    while (!this.state.result && this.nextSupplyIndex < schedule.length) {
+      const scheduledAt = schedule[this.nextSupplyIndex];
+      if (!this.state.supplyPreview && this.state.elapsedSeconds + 1e-9 >= scheduledAt - 1) this.announceSupply(scheduledAt);
+      if (this.state.elapsedSeconds + 1e-9 < scheduledAt) break;
+      this.spawnSupply(scheduledAt); this.nextSupplyIndex++;
     }
   }
   /** Return a detached public copy so consumers cannot mutate the simulation. */

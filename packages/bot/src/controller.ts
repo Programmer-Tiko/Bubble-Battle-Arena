@@ -1,5 +1,5 @@
 import { DEFAULT_BOMB_CONFIG, DEFAULT_MOVEMENT_CONFIG } from "@bubble/engine";
-import type { GameSnapshot, MovementInput, PlayerState } from "@bubble/shared";
+import type { AuthoritativeGameSnapshot as GameSnapshot, MovementInput, PlayerState } from "@bubble/shared";
 import { HazardMap } from "./hazard.js";
 import { findPath, type SearchOptions, type Waypoint } from "./pathfinding.js";
 

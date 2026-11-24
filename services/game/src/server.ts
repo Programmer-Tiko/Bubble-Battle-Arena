@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Server } from "socket.io";
 import { DEFAULT_MOVEMENT_CONFIG, Game } from "@bubble/engine";
 import { BotController, type BotCommand, type BotDifficulty } from "@bubble/bot";
-import type { ClientEvents, ServerEvents, MovementInput, SessionMode, Reply, GameSnapshot } from "@bubble/shared";
+import type { ClientEvents, ServerEvents, MovementInput, SessionMode, Reply, GameSnapshot, AuthoritativeGameSnapshot } from "@bubble/shared";
 
 const idle: MovementInput = { up: false, down: false, left: false, right: false };
 const tickMs = DEFAULT_MOVEMENT_CONFIG.timestepSeconds * 1000;
@@ -17,7 +17,14 @@ const localHost = (host: string | undefined) => !!host && /^(localhost|127\.0\.0
 
 export interface ServerOptions { snapshotEveryTicks?: number; staleInputMs?: number; autoTick?: boolean; now?: () => number; environment?: string; maxSessions?: number; maxConnections?: number; maxMembersPerSession?: number; emptySessionMs?: number; completedSessionMs?: number; cleanupIntervalMs?: number; joinTimeoutMs?: number; botDebug?: boolean }
 interface Slot { id: string; claimed: boolean; socketId?: string; lastInputAt: number; bot?: BotController; botCommand?: BotCommand }
-export interface Session { id: string; game: Game; slots: Slot[]; timer?: ReturnType<typeof setInterval>; completed: boolean; completedAt?: number; emptySince: number; members: Set<string>; snapshot: GameSnapshot }
+export interface Session { id: string; game: Game; slots: Slot[]; timer?: ReturnType<typeof setInterval>; completed: boolean; completedAt?: number; emptySince: number; members: Set<string>; snapshot: AuthoritativeGameSnapshot }
+
+/** Explicit allowlists keep server-only bomb fields out of every ordinary client event. */
+export function publicSnapshot(snapshot: AuthoritativeGameSnapshot): GameSnapshot {
+  const { tick, elapsedSeconds, result, map, players, explosions, items, balloon, supplyPreview } = snapshot;
+  return { tick, elapsedSeconds, result, map, players, explosions, items, balloon, supplyPreview,
+    bombs: snapshot.bombs.map(({ id, ownerId, x, y, range }) => ({ id, ownerId, x, y, range })) };
+}
 
 /** Development launcher only. Replace the join boundary with verified identity/room authorization for production. */
 export function createGameServer(options: ServerOptions = {}) {
@@ -77,7 +84,7 @@ export function createGameServer(options: ServerOptions = {}) {
     }
     session.game.step();
     const snap = session.snapshot = session.game.getSnapshot();
-    if (snap.tick % snapshotEvery === 0 || snap.result) io.to(session.id).emit("snapshot", snap);
+    if (snap.tick % snapshotEvery === 0 || snap.result) io.to(session.id).emit("snapshot", publicSnapshot(snap));
     if (snap.result) { session.completed = true; session.completedAt = now(); if (session.timer) clearInterval(session.timer); io.to(session.id).emit("finished", snap.result); }
   };
   const cleanup = () => {
@@ -121,7 +128,7 @@ export function createGameServer(options: ServerOptions = {}) {
       if (slot) { slot.claimed = true; slot.socketId = socket.id; slot.lastInputAt = now(); }
       socket.join(found.id);
       const snapshot = found.game.getSnapshot();
-      reply(cb, { ok: true, value: { playerId: slot?.id ?? null, teamId: snapshot.players.find(p => p.id === slot?.id)?.teamId ?? null, snapshot } });
+      reply(cb, { ok: true, value: { playerId: slot?.id ?? null, teamId: snapshot.players.find(p => p.id === slot?.id)?.teamId ?? null, snapshot: publicSnapshot(snapshot) } });
     });
     const playerReady = () => !!session && !!slot && !session.completed && session.snapshot.players.find(p => p.id === slot!.id)?.status !== "eliminated";
     socket.on("move", (command, cb) => {
