@@ -30,6 +30,42 @@ beforeEach(async () => {
 afterEach(async () => { sockets.forEach(s => s.disconnect()); await server.close(); });
 
 describe("server-controlled bots", () => {
+  it("reuses an unchanged view but refreshes it after a bot places a bomb", () => {
+    const session = server.create("ffa", 4, 4), s = openArena(session);
+    const snapshots = vi.spyOn(session.game, "getSnapshot");
+    const idle = { up: false, down: false, left: false, right: false };
+    const observed: number[] = [];
+    session.slots.forEach((slot, index) => vi.spyOn(slot.bot!, "update").mockImplementation(view => {
+      observed.push(view.bombs.length);
+      return { input: idle, placeBomb: index === 0, state: "WAIT", reason: "test" };
+    }));
+    server.tick(session);
+    expect(observed).toEqual([0, 1, 1, 1]);
+    expect(snapshots).toHaveBeenCalledTimes(3); // initial, successful placement, post-step
+    expect(s.bombs).toHaveLength(1);
+  });
+  it("freezes detached nested state and reuses it after an unsuccessful placement", () => {
+    const session = server.create("ffa", 4, 4), s = openArena(session), idle = { up: false, down: false, left: false, right: false };
+    expect(session.game.placeBomb(session.slots[0].id)).toBe(true);
+    const views: GameState[] = [];
+    session.slots.forEach((slot, index) => vi.spyOn(slot.bot!, "update").mockImplementation(view => {
+      views.push(view);
+      if (index === 0) {
+        expect(Object.isFrozen(view)).toBe(true);
+        expect(Object.isFrozen(view.map.tiles[1][1])).toBe(true);
+        expect(Object.isFrozen(view.players[0].inventory)).toBe(true);
+        expect(() => { view.map.tiles[1][1].type = "destructible"; }).toThrow();
+        expect(() => { view.bombs.push({ ...view.bombs[0] }); }).toThrow();
+      }
+      return { input: idle, placeBomb: index === 0, state: "WAIT", reason: "test" };
+    }));
+    const snapshots = vi.spyOn(session.game, "getSnapshot");
+    server.tick(session);
+    expect(views.every(view => view === views[0])).toBe(true);
+    expect(snapshots).toHaveBeenCalledTimes(2);
+    expect(s.map.tiles[1][1].type).toBe("floor");
+    expect(session.game.getSnapshot().bombs).toHaveLength(1);
+  });
   it.each([
     ["ffa", 4, 3, "normal"], ["ffa", 4, 3, "hard"], ["ffa", 4, 4, "normal"],
     ["ffa", 8, 8, "normal"], ["team", 4, 2, "normal"],

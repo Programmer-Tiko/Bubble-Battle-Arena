@@ -14,8 +14,9 @@ const supply = (state: GameState) => state.items.filter(item => item.supplyDropp
 
 describe("balloon supply", () => {
   it("uses fresh entropy for default matches while explicit seeds stay reproducible", () => {
+    let value = 0;
     const random = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation(array => {
-      (array as Uint32Array)[0] = random.mock.calls.length <= 5 ? 0 : 0xffffffff;
+      (array as Uint32Array)[0] = value;
       return array;
     });
     try {
@@ -25,7 +26,7 @@ describe("balloon supply", () => {
         state.tick = 5369; state.elapsedSeconds = 5369 / 30; game.step();
         return game.getSnapshot().supplyPreview!.tiles;
       };
-      const first = preview(), second = preview();
+      const first = preview(); value = 0xffffffff; const second = preview();
       expect(first).not.toEqual(second);
       const calls = random.mock.calls.length;
       expect(preview(17)).toEqual(preview(17));

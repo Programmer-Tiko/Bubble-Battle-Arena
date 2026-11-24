@@ -65,12 +65,69 @@ export class Game {
         !Number.isInteger(b.maxRange) || b.maxRange < 1 || typeof b.stopAtDestructible !== "boolean" || !["ignore", "reset", "eliminate"].includes(b.repeatedHit)) throw new RangeError("Invalid bomb configuration");
     for (const id of playerIds) this.upgrades.set(id, { capacity: b.initialCapacity, range: 1 });
     this.state = { tick: 0, elapsedSeconds: 0, result: null, map, bombs: [], explosions: [], players: playerIds.map((id, i) => ({ id, teamId: match?.mode === "team" ? match.teams![id] : id, x: (spawns[i].x + 0.5) * map.tileSize, y: (spawns[i].y + 0.5) * map.tileSize, status: "alive", trappedSeconds: 0, boots: 0, capacityUpgrades: 0, rangeUpgrades: 0, inventory: Array(5).fill(null), slowSeconds: 0, slide: null, direction: { ...IDLE } })), items: [], balloon: null, supplyPreview: null };
-    // Provisional initial distribution: four boots and a configurable supply of other items.
+    // Use a separate stream so initial placement cannot alter balloon drops.
+    const itemRandom = seededRandom((mapConfig.seed === undefined ? Math.floor(freshRandom() * 0x100000000) : mapConfig.seed) ^ 0x317e6a21);
     const available = map.tiles.flat().filter(t => t.type === "floor" && !spawns.some(p => Math.abs(p.x - t.x) + Math.abs(p.y - t.y) <= 1));
-    for (const tile of map.tiles.flat()) if (tile.type === "floor" && !available.includes(tile)) available.push(tile);
-    const types: ItemType[] = ["boots", "boots", "boots", "boots"];
+    const fallback = map.tiles.flat().filter(t => t.type === "floor" && !available.includes(t));
+    const types: ItemType[] = [];
     for (const type of ["capacity", "range", "banana", "slowdown"] as const) for (let i = 0; i < this.itemConfig.initialOtherPerType; i++) types.push(type);
-    for (const type of types) { const tile = available.shift(); if (tile) this.addItem(type, tile.x, tile.y, "pickup"); }
+    // Shuffle to break equal-scoring choices reproducibly without favoring a spawn.
+    for (let i = types.length - 1; i > 0; i--) { const j = Math.floor(itemRandom() * (i + 1)); [types[i], types[j]] = [types[j], types[i]]; }
+    for (let i = available.length - 1; i > 0; i--) { const j = Math.floor(itemRandom() * (i + 1)); [available[i], available[j]] = [available[j], available[i]]; }
+    const chosen: typeof available = [];
+    // Balance the worst nearest walkable distance and the gap between spawns,
+    // breaking ties by total distance. Every distance uses the floor graph.
+    const cell = (x: number, y: number) => y * map.width + x;
+    const distances = spawns.map(spawn => {
+      const dist = new Int32Array(map.width * map.height).fill(-1), queue = [cell(spawn.x, spawn.y)];
+      dist[queue[0]] = 0;
+      for (let q = 0; q < queue.length; q++) {
+        const at = queue[q], x = at % map.width, y = Math.floor(at / map.width);
+        for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx = x + dx, ny = y + dy, next = cell(nx, ny);
+          if (map.tiles[ny]?.[nx]?.type === "floor" && dist[next] < 0) { dist[next] = dist[at] + 1; queue.push(next); }
+        }
+      }
+      return dist;
+    });
+    const candidates = available.length >= 4 ? [...available] : [...available, ...fallback];
+    const bootTiles = candidates.slice(0, Math.min(4, candidates.length));
+    const score = () => {
+      let worst = 0, closest = Infinity, total = 0;
+      for (const dist of distances) {
+        let nearest = Infinity;
+        for (const t of bootTiles) { const d = dist[cell(t.x, t.y)]; if (d >= 0) nearest = Math.min(nearest, d); }
+        worst = Math.max(worst, nearest); closest = Math.min(closest, nearest); total += nearest;
+      }
+      return [2 * worst + (worst - closest), total];
+    };
+    // Coordinate descent is bounded and keeps equal-score random tie order.
+    for (let pass = 0; pass < 3; pass++) for (let i = 0; i < bootTiles.length; i++) {
+      let best = bootTiles[i], [bestWorst, bestTotal] = score();
+      for (const candidate of candidates) {
+        if (bootTiles.some((t, j) => j !== i && t === candidate)) continue;
+        bootTiles[i] = candidate;
+        const [worst, total] = score();
+        if (worst < bestWorst || (worst === bestWorst && total < bestTotal)) { best = candidate; bestWorst = worst; bestTotal = total; }
+      }
+      bootTiles[i] = best;
+    }
+    for (const t of bootTiles) {
+      const pool = available.includes(t) ? available : fallback;
+      pool.splice(pool.indexOf(t), 1); chosen.push(t); this.addItem("boots", t.x, t.y, "pickup");
+    }
+    // Spread the other item types around the selected boots.
+    for (const type of types) {
+      if (!available.length) available.push(...fallback.splice(0));
+      if (!available.length) break;
+      let best = 0, score = -1;
+      for (let i = 0; i < available.length; i++) {
+        const t = available[i];
+        const spacing = chosen.length ? Math.min(...chosen.map(p => Math.abs(p.x - t.x) + Math.abs(p.y - t.y))) : Infinity;
+        if (spacing > score) { best = i; score = spacing; }
+      }
+      const [t] = available.splice(best, 1); chosen.push(t); this.addItem(type, t.x, t.y, "pickup");
+    }
   }
   setInput(playerId: string, input: MovementInput): void {
     if (!this.state.players.some(p => p.id === playerId)) throw new RangeError("Unknown player");

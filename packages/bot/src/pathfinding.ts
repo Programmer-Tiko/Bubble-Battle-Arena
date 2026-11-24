@@ -18,6 +18,15 @@ export function findPath(snapshot: GameSnapshot, player: PlayerState, goal: { x:
   const speed = DEFAULT_MOVEMENT_CONFIG.speed * (player.slowSeconds > 0 ? 0.5 : 1 + player.boots * 0.1);
   const moveTicks = Math.max(1, Math.ceil(size / speed / dt));
   const maxTick = Math.floor(horizon / dt);
+  // Occupancy is constant during one search; do not scan all items and bombs
+  // for every successor of every time-expanded node.
+  const tileKey = (x: number, y: number) => y * snapshot.map.width + x;
+  const blocked = new Set(snapshot.items.filter(i => i.kind !== "pickup" && i.active).map(i => tileKey(i.x, i.y)));
+  const bombs = new Map<number, number>();
+  for (const bomb of snapshot.bombs) {
+    const k = tileKey(bomb.x, bomb.y);
+    bombs.set(k, Math.max(bombs.get(k) ?? -Infinity, hazards.detonationTimes.get(bomb.id) ?? Infinity));
+  }
   const startTick = Math.ceil(delay / dt);
   if (startTick > maxTick || hazards.isDangerousDuring(startX, startY, 0, startTick * dt)) return { path: [], expanded: 0, exhausted: false, partial: false };
   const heuristic = (x: number, y: number) => options.goalTest ? 0 : (Math.abs(goal.x - x) + Math.abs(goal.y - y)) * moveTicks;
@@ -66,10 +75,10 @@ export function findPath(snapshot: GameSnapshot, player: PlayerState, goal: { x:
       const x = current.x + dx, y = current.y + dy, moving = dx !== 0 || dy !== 0;
       if (snapshot.map.tiles[y]?.[x]?.type !== "floor") continue;
       // Avoid active traps and dropped hazards rather than predicting forced slides.
-      if (snapshot.items.some(i => i.x === x && i.y === y && i.kind !== "pickup" && i.active)) continue;
+      if (blocked.has(tileKey(x, y))) continue;
       const arrival = current.tick + (moving ? moveTicks : 1);
       if (arrival > maxTick) continue;
-      if (snapshot.bombs.some(b => b.x === x && b.y === y && (moving || x !== startX || y !== startY) && current.time < (hazards.detonationTimes.get(b.id) ?? Infinity))) continue;
+      if ((moving || x !== startX || y !== startY) && current.time < (bombs.get(tileKey(x, y)) ?? -Infinity)) continue;
       const safe = !hazards.isDangerousDuring(current.x, current.y, current.time, arrival * dt) &&
         !hazards.isDangerousDuring(x, y, current.time, arrival * dt);
       if (safe) push({ x, y, tick: arrival, time: arrival * dt, score: arrival + heuristic(x, y), parent: current });

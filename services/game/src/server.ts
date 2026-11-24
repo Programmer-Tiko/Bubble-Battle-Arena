@@ -15,6 +15,18 @@ const localOrigin = (origin: string | undefined) => !origin || /^http:\/\/(local
 const loopback = (address: string | undefined) => address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 const localHost = (host: string | undefined) => !!host && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
 
+/** Bot views are detached and shared, so a controller must not alter the view
+ * observed by subsequent controllers. Only the private clone is frozen. */
+function freezeBotSnapshot(snapshot: AuthoritativeGameSnapshot): AuthoritativeGameSnapshot {
+  const freeze = (value: unknown): void => {
+    if (value === null || typeof value !== "object" || Object.isFrozen(value)) return;
+    Object.freeze(value);
+    for (const child of Object.values(value)) freeze(child);
+  };
+  freeze(snapshot);
+  return snapshot;
+}
+
 export interface ServerOptions { snapshotEveryTicks?: number; staleInputMs?: number; autoTick?: boolean; now?: () => number; environment?: string; maxSessions?: number; maxConnections?: number; maxMembersPerSession?: number; emptySessionMs?: number; completedSessionMs?: number; cleanupIntervalMs?: number; joinTimeoutMs?: number; botDebug?: boolean }
 interface Slot { id: string; claimed: boolean; socketId?: string; lastInputAt: number; bot?: BotController; botCommand?: BotCommand }
 export interface Session { id: string; game: Game; slots: Slot[]; timer?: ReturnType<typeof setInterval>; completed: boolean; completedAt?: number; emptySince: number; members: Set<string>; snapshot: AuthoritativeGameSnapshot }
@@ -73,14 +85,17 @@ export function createGameServer(options: ServerOptions = {}) {
   const tick = (session: Session) => {
     if (session.completed) return;
     for (const slot of session.slots) if (slot.socketId && now() - slot.lastInputAt > staleMs) session.game.setInput(slot.id, idle);
-    // Re-read after each action so later bots see bombs placed earlier in this tick.
+    // Inputs are applied on step and do not change the snapshot. Reuse one
+    // detached view until a successful placement changes the world; later bots
+    // must immediately see that bomb when making their safety decisions.
     const bots = session.slots.filter(slot => slot.bot);
+    let botSnapshot = bots.length ? freezeBotSnapshot(session.game.getSnapshot()) : undefined;
     for (let i = 0; i < bots.length; i++) {
       const slot = bots[i];
-      const decision = slot.bot!.update(session.game.getSnapshot(), session.snapshot.tick % bots.length === i);
+      const decision = slot.bot!.update(botSnapshot!, session.snapshot.tick % bots.length === i);
       slot.botCommand = decision;
       session.game.setInput(slot.id, decision.input);
-      if (decision.placeBomb) session.game.placeBomb(slot.id);
+      if (decision.placeBomb && session.game.placeBomb(slot.id)) botSnapshot = freezeBotSnapshot(session.game.getSnapshot());
     }
     session.game.step();
     const snap = session.snapshot = session.game.getSnapshot();
