@@ -1,10 +1,10 @@
 import { DEFAULT_BOMB_CONFIG, DEFAULT_MOVEMENT_CONFIG } from "@bubble/engine";
-import type { AuthoritativeGameSnapshot as GameSnapshot, MovementInput, PlayerState } from "@bubble/shared";
+import type { AuthoritativeGameSnapshot as GameSnapshot, BotDifficulty, MovementInput, PlayerState } from "@bubble/shared";
 import { HazardMap } from "./hazard.js";
 import { findPath, type SearchOptions, type Waypoint } from "./pathfinding.js";
 
 export type BotState = "ESCAPE" | "COLLECT_ITEM" | "APPROACH_OPPONENT" | "REPOSITION" | "ATTACK" | "WAIT" | "TRAPPED" | "ELIMINATED";
-export type BotDifficulty = "easy" | "normal" | "hard";
+export type { BotDifficulty } from "@bubble/shared";
 const levels = {
   easy: { interval: 36, horizon: 3.6, threat: 3.4, escapeUntil: 3.6, goals: 1, nodes: 220, escapeNodes: 350 },
   normal: { interval: 18, horizon: 5, threat: 3.8, escapeUntil: 4, goals: 3, nodes: 350, escapeNodes: 500 },

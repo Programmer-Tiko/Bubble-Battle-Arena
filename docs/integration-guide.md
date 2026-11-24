@@ -46,7 +46,7 @@ All current events use the WebSocket transport and require acknowledgement callb
 | Client → server | `move: { seq: number, input: { up: boolean, down: boolean, left: boolean, right: boolean } }` | Sets the server-side player's input. |
 | Client → server | `bomb: { seq: number }` | Requests bomb placement. |
 | Client → server | `item: { seq: number, slot: number }` | Requests use of zero-based inventory slot 0–4. |
-| Server → joined session | `snapshot: GameSnapshot` | Complete authoritative state, including map, players, bombs, explosions, items, balloon, tick, elapsed time and result. A new join's acknowledgement contains a full snapshot. |
+| Server → joined session | `snapshot: GameSnapshot` | Public projection of the current state; exact bomb and trapped-player countdowns are omitted. A new join's acknowledgement contains the same public projection. |
 | Server → joined session | `finished: MatchResult` | Once, when a game ends: `{ kind: "winner", teamId: string }` or `{ kind: "draw" }`. The final snapshot is also broadcast. |
 
 An ack is `{ ok: true, value: ... }` or `{ ok: false, error: string }`; a successful command's `undefined` value may be omitted by JSON serialization. Connection errors and disconnections use Socket.IO lifecycle events rather than custom gameplay events. The server rejects unknown events, unauthorized spectator actions, invalid or extra fields, duplicate/out-of-order sequences, and oversized payloads. The default incoming payload limit is 1 KiB and the per-socket known-event limit is 90 messages per second. A client supplies no position, team, identity, inventory count or result.
@@ -58,6 +58,8 @@ There is **no explicit resync event** today: the full join snapshot and periodic
 The Room Manager must authenticate and authorize its own server-to-server call. It should validate that the room is start-eligible: 4–8 FFA players or 4/6/8 team players; exactly two players per team; all non-host players ready; and an eligible automatic countdown or host start. Player-selected teams must be frozen in the roster at start. The host cannot bypass eligibility. It should allocate a match once, with an idempotency key, then hand the game service a trusted roster and map stable account subjects to opaque match player IDs. The game service must validate the roster again and construct `Game` with its IDs and `MatchConfig`; it must not route this request through the current `create(mode, count)`, which generates different IDs and pairs.
 
 The following are **proposed interfaces**, not exports or implemented endpoints:
+
+The shared `MatchStart.snapshot` uses the public `GameSnapshot` contract. Future match-start serialization must call the server's `publicSnapshot()` projection before sending it: a TypeScript type annotation or cast does not remove authoritative `remainingSeconds` or `trappedSeconds` at runtime. Keep `AuthoritativeGameSnapshot` for the engine and server-side bots, and test match-start redaction for players, spectators, and late joins when that boundary is implemented.
 
 ```ts
 import type { MatchResult, SessionMode } from "@bubble/shared";
