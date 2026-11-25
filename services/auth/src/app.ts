@@ -15,11 +15,41 @@ export interface AuthOptions {
   privateKey: string;
   /** true in production (HTTPS), so the cookie is only ever sent over TLS. */
   secureCookie: boolean;
+  /** Exact origins allowed to POST, e.g. ["http://localhost:8080", "https://bubble.example.com"]. */
+  allowedOrigins: string[];
+  /** true when running behind nginx, so req.ip is the real user's address instead of nginx's. */
+  trustProxy?: boolean;
   bcryptRounds?: number;
   tokenSeconds?: number;
 }
 
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
+
+/**
+ * Allows at most `max` requests per key in each time window, then answers 429.
+ * Kept in memory: fine for a single auth container, and it resets when the container restarts.
+ */
+function rateLimit(keyOf: (req: Request) => string, max: number, windowMs: number) {
+  const hits = new Map<string, { count: number; resetAt: number }>();
+  return (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    const key = keyOf(req);
+    let entry = hits.get(key);
+    if (!entry || entry.resetAt <= now) {
+      entry = { count: 0, resetAt: now + windowMs };
+      hits.set(key, entry);
+    }
+    entry.count++;
+    if (entry.count > max) {
+      res.setHeader("Retry-After", String(Math.ceil((entry.resetAt - now) / 1000)));
+      res.status(429).json({ error: "Too many attempts, please wait a minute" });
+      return;
+    }
+    // Forget expired entries so the map can't grow forever
+    if (hits.size > 10000) for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k);
+    next();
+  };
+}
 
 /** Returns the username and password if they are valid, otherwise null. */
 function readCredentials(body: unknown): { username: string; password: string } | null {
@@ -45,11 +75,26 @@ export function createAuthApp(options: AuthOptions) {
 
   const app = express();
   app.disable("x-powered-by");
+  // Behind nginx every request comes from nginx's address; trusting one proxy hop
+  // makes req.ip the real client address (needed for per-user rate limits)
+  app.set("trust proxy", options.trustProxy ? 1 : false);
 
-  // XSRF protection: every POST must be JSON. A form on another site can't send JSON
-  // without a CORS preflight, and the cookie is SameSite=Strict on top of that.
+  // XSRF protection, three layers:
+  // 1. A browser POST from another site carries that site's Origin header, so reject it.
+  //    (Requests with no Origin, like curl, can't use a victim's cookie anyway.)
+  // 2. Every POST must be JSON: a form on another site can't send JSON without a CORS preflight.
+  // 3. The cookie itself is SameSite=Strict.
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.method === "POST" && !req.is("application/json")) {
+    if (req.method !== "POST") {
+      next();
+      return;
+    }
+    const origin = req.get("origin");
+    if (origin !== undefined && !options.allowedOrigins.includes(origin)) {
+      res.status(403).json({ error: "Origin not allowed" });
+      return;
+    }
+    if (!req.is("application/json")) {
       res.status(415).json({ error: "Requests must be JSON" });
       return;
     }
@@ -57,10 +102,18 @@ export function createAuthApp(options: AuthOptions) {
   });
   app.use(express.json({ limit: "2kb" }));
 
+  // Brute force / bcrypt CPU protection. Per IP is generous because a whole classroom can share
+  // one public IP; per account is strict because password guessing targets one username.
+  const perIp = rateLimit(req => req.ip ?? "unknown", 60, 60_000);
+  const perAccount = rateLimit(req => {
+    const username = (req.body as { username?: unknown } | undefined)?.username;
+    return `${req.ip}|${typeof username === "string" ? username.toLowerCase() : ""}`;
+  }, 10, 60_000);
+
   app.get("/login", (_req, res) => { res.type("html").send(loginPage); });
   app.get("/register", (_req, res) => { res.type("html").send(registerPage); });
 
-  app.post("/register", async (req, res) => {
+  app.post("/register", perIp, async (req, res) => {
     const credentials = readCredentials(req.body);
     if (!credentials) {
       res.status(400).json({ error: "Username must be 3-20 letters, numbers, or _ and the password 8-72 characters" });
@@ -75,7 +128,7 @@ export function createAuthApp(options: AuthOptions) {
     res.status(201).json({ username: user.username });
   });
 
-  app.post("/login", async (req, res) => {
+  app.post("/login", perIp, perAccount, async (req, res) => {
     const credentials = readCredentials(req.body);
     const user = credentials ? await options.users.findByUsername(credentials.username) : null;
     const passwordMatches = await bcrypt.compare(credentials?.password ?? "", user?.passwordHash ?? dummyHash);

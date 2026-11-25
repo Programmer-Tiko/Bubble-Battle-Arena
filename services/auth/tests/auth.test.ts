@@ -28,12 +28,15 @@ afterEach(() => servers.splice(0).forEach(s => s.close()));
 function start() {
   const dir = mkdtempSync(join(tmpdir(), "auth-test-"));
   const keys = loadOrCreateKeys(join(dir, "private", "private.pem"), join(dir, "public", "public.pem"));
-  const app = createAuthApp({ users: new MemoryUserStore(), privateKey: keys.privateKey, secureCookie: false, bcryptRounds: 4 });
+  const app = createAuthApp({
+    users: new MemoryUserStore(), privateKey: keys.privateKey, secureCookie: false, bcryptRounds: 4,
+    allowedOrigins: ["http://localhost:8080"],
+  });
   const server = app.listen(0);
   servers.push(server);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const post = (path: string, body: unknown) =>
-    fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const post = (path: string, body: unknown, origin = "http://localhost:8080") =>
+    fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify(body) });
   return { base, post, keys };
 }
 
@@ -65,6 +68,23 @@ describe("auth server", () => {
       body: "username=alice&password=Password1!",
     });
     expect(response.status).toBe(415);
+  });
+
+  it("rejects POSTs from other origins (XSRF)", async () => {
+    const { post } = start();
+    expect((await post("/register", { username: "alice", password: "Password1!" }, "http://evil.example")).status).toBe(403);
+    expect((await post("/register", { username: "alice", password: "Password1!" }, "http://localhost:5000")).status).toBe(403);
+    expect((await post("/register", { username: "alice", password: "Password1!" })).status).toBe(201);
+  });
+
+  it("rate limits password guessing on one account but not other accounts", async () => {
+    const { post } = start();
+    await post("/register", { username: "alice", password: "Password1!" });
+    for (let i = 0; i < 10; i++) expect((await post("/login", { username: "alice", password: "WrongPass1!" })).status).toBe(401);
+    const blocked = await post("/login", { username: "alice", password: "Password1!" });
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("retry-after")).not.toBeNull();
+    expect((await post("/login", { username: "bob", password: "Password1!" })).status).toBe(401); // other accounts still work
   });
 
   it("gives the same error for a wrong password and an unknown user", async () => {

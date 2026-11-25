@@ -30,6 +30,18 @@ for (let attempt = 1; ; attempt++) {
   }
 }
 
-const app = createAuthApp({ users, privateKey: keys.privateKey, secureCookie: env.COOKIE_SECURE === "true" });
-const port = Number(env.PORT ?? 3002);
+// Secure cookies are ON unless explicitly turned off, so forgetting the variable in production is safe.
+// Only the local docker compose setup (plain HTTP on localhost:8080) sets COOKIE_SECURE=false.
+const secureCookie = env.COOKIE_SECURE !== "false";
+if (!secureCookie) console.warn("WARNING: COOKIE_SECURE=false, cookies will be sent over plain HTTP (local development only)");
+
+const allowedOrigins = (env.ALLOWED_ORIGINS ?? "http://localhost:8080").split(",").map(origin => origin.trim());
+
+const app = createAuthApp({
+  users,
+  privateKey: keys.privateKey,
+  secureCookie,
+  allowedOrigins,
+  trustProxy: env.TRUST_PROXY === "true",
+});const port = Number(env.PORT ?? 3002);
 app.listen(port, "0.0.0.0", () => console.log(`Auth server listening on port ${port}`));
