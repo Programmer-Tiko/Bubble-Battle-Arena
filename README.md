@@ -307,7 +307,31 @@ The following were **not yet decided** and should not be treated as finalized ru
 - Inventory full behavior, maximum stack counts, private room password handling, and room lifecycle after matches.
 - Final choice and evaluation method for Objective 4.
 
-## 15. Setup and Deployment (To Be Added)
+## 15. Setup and Deployment
+
+### Run with Docker (how the app is graded)
+
+Requires Docker Desktop. No `.env` file is needed for local use.
+
+```bash
+git clone <REPOSITORY_CLONE_URL>
+cd Bubble-Battle-Arena
+docker compose up --build
+# Open http://localhost:8080/
+```
+
+| Container | Role | Published port |
+| --- | --- | --- |
+| `nginx` | Reverse proxy: `/register`, `/login`, `/logout` → auth; `/socket.io/` → app (WebSocket upgrade); everything else → app. Rate limits the auth routes. | **8080** (only one) |
+| `app` | Express production entry (`services/game/src/production.ts`): serves the frontend at `/` and `GET /api/me` | none |
+| `auth` | Separate auth server (`services/auth`): accounts, bcrypt passwords, RS256 JWTs in an `HttpOnly` cookie | none |
+| `postgres` | Database (accounts) | none, never exposed |
+
+Volumes: `postgres_data` (accounts), `auth_private_key` (mounted **only** in `auth`), and `jwt_public_key` (written by `auth`, mounted **read-only** in `app`). The key pair is generated on first start, never committed, and persists across restarts, so logins survive `docker compose restart`. Use `docker compose down -v` to wipe all data and keys.
+
+Configuration overrides are listed in [`.env.example`](.env.example). For the deployed server, always set a real `POSTGRES_PASSWORD`, `COOKIE_SECURE=true`, and add the HTTPS origin to `ALLOWED_ORIGINS`.
+
+**Known limitation:** JWTs are stateless. Logging out deletes the cookie in that browser, but a copy of the token stays valid until it expires (24 hours). The token is `HttpOnly`, `SameSite=Strict`, and `Secure` in production, which makes stealing a copy difficult, and the game server checks `exp` on every verification.
 
 **Local single-player mode:** install Node.js 20.19+ or 22.12+ and run:
 

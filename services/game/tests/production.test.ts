@@ -9,9 +9,16 @@ import * as authApp from "../../auth/src/app.js";
 import { COOKIE_NAME, JWT_AUDIENCE, JWT_ISSUER, readCookie, verifyIdentity } from "../src/jwt.js";
 import { createProductionApp } from "../src/production-app.js";
 
-const pem = { publicKeyEncoding: { type: "spki", format: "pem" }, privateKeyEncoding: { type: "pkcs8", format: "pem" } } as const;
-const keys = generateKeyPairSync("rsa", { modulusLength: 2048, ...pem });
-const otherKeys = generateKeyPairSync("rsa", { modulusLength: 2048, ...pem });
+/** A fresh RSA key pair as PEM text, like the auth server creates. */
+function pemKeys() {
+  return generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: "spki", format: "pem" },
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  });
+}
+const keys = pemKeys();
+const otherKeys = pemKeys();
 
 /** Signs a token the way the auth server does; overrides let tests break one thing at a time. */
 function sign(overrides: Partial<jwt.SignOptions> = {}, payload: object = { username: "alice" }, key: string = keys.privateKey) {
