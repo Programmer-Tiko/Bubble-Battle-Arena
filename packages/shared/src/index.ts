@@ -1,3 +1,5 @@
+export * from "./appearance.js";
+
 /** Tiles use integer grid coordinates; player positions use world units. */
 export type TileType = "floor" | "indestructible" | "destructible";
 export interface Tile { x: number; y: number; type: TileType }
